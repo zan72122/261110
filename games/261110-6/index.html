@@ -970,9 +970,9 @@ function captureMemorial(){
   let f=null,b=null;try{f=cf.toDataURL('image/png');b=cb.toDataURL('image/png');}catch(e){}
   return {m,f,b};
 }
-function addMemorial(cap,replaceId){
-  const i=memorials.findIndex(q=>q.id===replaceId);
-  if(i>=0){memorials[i]=cap.m;cap.m.id=replaceId;}else{memorials.unshift(cap.m);if(memorials.length>4)memorials.pop();}
+function addMemorial(cap,replaceId,visual){
+  if(visual!==false){const i=replaceId?memorials.findIndex(q=>q.id===replaceId):-1;
+    if(i>=0)memorials[i]=cap.m;else{memorials.unshift(cap.m);if(memorials.length>4)memorials.pop();}}
   if(cap.f&&cap.b){const j=persist.memorials.findIndex(q=>q.id===cap.m.id);const e={id:cap.m.id,f:cap.f,b:cap.b};
     if(j>=0)persist.memorials[j]=e;else{persist.memorials.unshift(e);persist.memorials=persist.memorials.slice(0,4);}}
   persistNow();
@@ -981,6 +981,9 @@ function complete(){
   st.cyc.done=true;st.f.d5=true;SND.complete();logEv('complete');
   const fp=flapPaperCenter();sparkle(fp[0],fp[1],fp[2],16,2.0);
   st.cyc.cap=captureMemorial();st.cyc.after=0;
+  // drop the in-progress snapshot of this page and store the finished one right away
+  const wid='w'+st.cyc.id+'_'+(persist.plays||0);persist.memorials=persist.memorials.filter(q=>q.id!==wid);{const wi=memorials.findIndex(q=>q.id===wid);if(wi>=0)memorials.splice(wi,1);}
+  addMemorial(st.cyc.cap,null,false);
   st.busy=2.8;st.glowStand=1;
   const b0=st.beta;tlAdd(0.5,1.0,(u)=>{st.beta=lerp(b0,155,easeIO(u));});
   tlAdd(1.8,0.9,(u)=>{st.beta=lerp(155,80,easeIO(u));});
@@ -989,7 +992,7 @@ function sendAside(){
   st.sendAside=true;st.busy=2.2;SND.whoosh();logEv('sendAside');
   const cap=st.cyc.cap||captureMemorial();
   st.fly={u:0,from:paperModel(),cap,b0:st.beta};
-  tlAdd(0,1.25,(u)=>{st.fly.u=easeIO(u);},()=>{addMemorial(cap,null);st.fly=null;SND.kotsun(0.75);});
+  tlAdd(0,1.25,(u)=>{st.fly.u=easeIO(u);},()=>{if(st.cyc.cap===cap){memorials.unshift(cap.m);if(memorials.length>4)memorials.pop();}else addMemorial(cap,null);st.fly=null;SND.kotsun(0.75);});
   tlAdd(0.05,0.01,null,()=>{for(const s of [SF.topF,SF.topB]){s.x.setTransform(1,0,0,1,0,0);s.x.clearRect(0,0,s.N,s.M);s.dirty=true;}st.newPaper=1;});
   tlAdd(0.3,0.9,(u)=>{st.beta=lerp(st.fly?st.fly.b0:st.beta,0,easeIO(u));},()=>{st.beta=0;});
   tlAdd(0.5,0.6,(u)=>{st.newPaper=1-easeOut(u);},()=>{st.newPaper=0;SND.paper();});
