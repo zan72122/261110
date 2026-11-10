@@ -23,7 +23,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#
 </head>
 <body>
 <canvas id="stage"></canvas>
-<canvas id="overlay"></canvas>
+<canvas id="overlay" style="display:none"></canvas>
 <div id="safe"></div>
 <div id="fallback"></div>
 <script>
@@ -45,10 +45,10 @@ const V = {
   scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
   dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
   cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
-  len: (a) => Math.hypot(a[0], a[1], a[2]),
-  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  len: (a) => Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]),
+  norm: (a) => { const l = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
   lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
-  dist: (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]),
+  dist: (a, b) => { const x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2]; return Math.sqrt(x * x + y * y + z * z); },
 };
 // rotate vector around Y by angle
 function rotY(v, a) { const c = Math.cos(a), s = Math.sin(a); return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c]; }
@@ -861,7 +861,7 @@ const AudioFX = (function () {
     v.stolen = true;
     try {
       v.out.gain.cancelScheduledValues(now);
-      v.out.gain.setValueAtTime(1, now);
+      v.out.gain.setValueAtTime(v.out.gain.value, now);
       v.out.gain.linearRampToValueAtTime(0, now + 0.04);
     } catch (e) { /* ignore */ }
     for (var i = 0; i < v.srcs.length; i++) {
@@ -1468,20 +1468,19 @@ function clothApplyLinks() {
 clothApplyLinks();
 const gx = (x) => (x - SHEET.x0) / DX, gz = (z) => (z - SHEET.z0) / DZ;
 
-function clothForce(x, z, r, amp) {
-  // gaussian downward pressure (accel), amp m/s^2
-  const R = r * 2.4;
+const _EX = new Float32Array(NX), _EZ = new Float32Array(NZ);
+function gaussAdd(arr, x, z, r, amp) {
+  // separable gaussian stamp: exp(-(dx²+dz²)/r²) = exp(-dx²/r²)·exp(-dz²/r²)
+  const R = r * 2.2;
   const i0 = Math.max(1, Math.floor(gx(x - R))), i1 = Math.min(NX - 2, Math.ceil(gx(x + R)));
   const j0 = Math.max(1, Math.floor(gz(z - R))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + R)));
+  if (i1 < i0 || j1 < j0) return;
   const inv = 1 / (r * r);
-  for (let j = j0; j <= j1; j++) {
-    const pz = SHEET.z0 + j * DZ, dz2 = (pz - z) * (pz - z);
-    for (let i = i0; i <= i1; i++) {
-      const px = SHEET.x0 + i * DX; const d2 = (px - x) * (px - x) + dz2;
-      Cl.f[i + j * NX] += amp * Math.exp(-d2 * inv);
-    }
-  }
+  for (let i = i0; i <= i1; i++) { const d = SHEET.x0 + i * DX - x; _EX[i] = Math.exp(-d * d * inv); }
+  for (let j = j0; j <= j1; j++) { const d = SHEET.z0 + j * DZ - z; _EZ[j] = amp * Math.exp(-d * d * inv); }
+  for (let j = j0; j <= j1; j++) { const ez = _EZ[j], row = j * NX; for (let i = i0; i <= i1; i++) arr[row + i] += ez * _EX[i]; }
 }
+function clothForce(x, z, r, amp) { gaussAdd(Cl.f, x, z, r, amp); }
 function clothForceEllipse(x, z, rx, rz, amp) {
   const i0 = Math.max(1, Math.floor(gx(x - rx * 2.2))), i1 = Math.min(NX - 2, Math.ceil(gx(x + rx * 2.2)));
   const j0 = Math.max(1, Math.floor(gz(z - rz * 2.2))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + rz * 2.2)));
@@ -1495,19 +1494,7 @@ function clothForceEllipse(x, z, rx, rz, amp) {
     }
   }
 }
-function clothImpulse(x, z, r, dv) {
-  const R = r * 2.4;
-  const i0 = Math.max(1, Math.floor(gx(x - R))), i1 = Math.min(NX - 2, Math.ceil(gx(x + R)));
-  const j0 = Math.max(1, Math.floor(gz(z - R))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + R)));
-  const inv = 1 / (r * r);
-  for (let j = j0; j <= j1; j++) {
-    const pz = SHEET.z0 + j * DZ, dz2 = (pz - z) * (pz - z);
-    for (let i = i0; i <= i1; i++) {
-      const px = SHEET.x0 + i * DX; const d2 = (px - x) * (px - x) + dz2;
-      Cl.v[i + j * NX] -= dv * Math.exp(-d2 * inv);
-    }
-  }
-}
+function clothImpulse(x, z, r, dv) { gaussAdd(Cl.v, x, z, r, -dv); }
 function clothStep(dt) {
   const h = Cl.h, v = Cl.v, f = Cl.f, wx = Cl.wx, wz = Cl.wz;
   const cx = Cl.c2 / (DX * DX), cz = Cl.c2 / (DZ * DZ), k = Cl.k, d = Cl.damp, visc = Cl.visc / Cl.c2;
@@ -1598,8 +1585,6 @@ function buildEnv() {
   });
   // dark spring gap under the sheet edge
   parts.push(kindGeo(surface(1, 1, (u, v) => ({ p: [lerp(-PAD.ox, PAD.ox, u), -0.5, lerp(-PAD.oz, PAD.oz, v)], n: [0, 1, 0] })), 6));
-  // rope for the ribbon (high above)
-  parts.push(rail([-9, 3.05, KID_Z], [9, 3.05, KID_Z], 0.008));
   const g = mergeGeo(parts);
   return makeMesh(g.verts, g.idx);
 }
@@ -2115,17 +2100,41 @@ function makeKid(id, x, z, seated) {
 }
 function kidHeadPos(k) { return [k.x, k.rootY + (k.seated ? 0.62 : 1.06) * k.def.scale, k.z]; }
 function chainInvolved(k) { return k.state === 'air' || !!k.pending; }
+function kidSpot(o) {
+  // where another child is, or is about to settle
+  if (o.seatTo) return o.seatTo;
+  if (o.reposition) return [o.reposition.x, o.reposition.z];
+  if (o.state === 'air' && o.air) return [o.air.x1, o.air.z1];
+  return [o.x, o.z];
+}
+function seatOK(px, pz, exclude, minD) {
+  return Game.kids.every(o => { if (o === exclude) return true; const q = kidSpot(o); return Math.hypot(px - q[0], pz - q[1]) >= minD - 1e-3; });
+}
 function nearestFree(x, z, exclude, minD) {
-  // push a seat position away from other kids and keep it on the sheet
+  // a free spot on the sheet near (x,z), keeping every child at least minD apart
   let px = clamp(x, -SEAT_X, SEAT_X), pz = clamp(z, SEAT_Z0, SEAT_Z1);
+  if (seatOK(px, pz, exclude, minD)) return [px, pz];
   for (let it = 0; it < 8; it++) {
     Game.kids.forEach(o => {
       if (o === exclude) return;
-      const ox = o.state === 'air' && o.air ? o.air.x1 : o.x, oz = o.state === 'air' && o.air ? o.air.z1 : o.z;
-      const dx = px - ox, dz = pz - oz, d = Math.hypot(dx, dz);
+      const q = kidSpot(o);
+      const dx = px - q[0], dz = pz - q[1], d = Math.hypot(dx, dz);
       if (d < minD) { const s = (minD - d) / (d || 1); px += (dx || (px >= 0 ? 0.01 : -0.01)) * s; pz += dz * s; }
     });
     px = clamp(px, -SEAT_X, SEAT_X); pz = clamp(pz, SEAT_Z0, SEAT_Z1);
+  }
+  if (seatOK(px, pz, exclude, minD)) return [px, pz];
+  // rings of candidates around the wish, closest valid one wins
+  for (let r = 0.15; r <= 2.4; r += 0.15) {
+    let best = null, bd = 1e9;
+    for (let k = 0; k < 16; k++) {
+      const a = k / 16 * TAU;
+      const cx = clamp(x + Math.cos(a) * r, -SEAT_X, SEAT_X), cz = clamp(z + Math.sin(a) * r, SEAT_Z0, SEAT_Z1);
+      if (!seatOK(cx, cz, exclude, minD)) continue;
+      const d = Math.hypot(cx - x, cz - z);
+      if (d < bd) { bd = d; best = [cx, cz]; }
+    }
+    if (best) return best;
   }
   return [px, pz];
 }
@@ -2255,7 +2264,7 @@ function sendChain(k, E, fromId) {
 // ===================================================================
 //  Launch / landing
 // ===================================================================
-function underRibbon(k) { const R = Game.ribbon; return Math.hypot(R.x - k.x, KID_Z - k.z) < 0.5 && R.up < 0.3; }
+function underRibbon(k) { const R = Game.ribbon; return Math.hypot(R.x - k.x, R.z - k.z) < 0.5 && R.up < 0.3; }
 function launch(k, H, o) {
   if (k.state === 'air') return;
   o = o || {};
@@ -2307,7 +2316,7 @@ function land(k) {
   if (!sc && a.sauc && saucerTakes(a.sauc, k)) sc = a.sauc;
   if (sc) {
     clothImpulse(k.x, k.z, 0.35, 0.5 + E * 0.6);
-    if (Game.kids.some(o => o !== k && (o.state === 'air' || o.pending))) Game.stats.chainAbsorbs++;
+    if (a.cause === 'chain' || Game.kids.some(o => o !== k && (o.state === 'air' || o.pending))) Game.stats.chainAbsorbs++;
     absorbInto(k, sc, 'landing');
     logEv('land', { kid: k.id, E: +E.toFixed(2), absorbed: true });
     return;
@@ -2347,7 +2356,7 @@ function flowBallsFrom(k) {
     const l = Math.hypot(ux, uz) || 1;
     const sp = tgt ? clamp(0.8 + l * 0.45, 0.9, 1.8) : 0.8;
     b.vx = ux / l * sp; b.vz = uz / l * sp; b.vy = 0.9; b.hop = 1;
-    b.flowT = tgt ? 3.0 : 0.8; b.flowTo = tgt; b.flowFrom = k.id; b.restT = 0;
+    b.flowT = tgt ? 4.0 : 0.8; b.flowTo = tgt; b.flowFrom = k.id; b.restT = 0;
     moved++;
   });
   if (moved) { Game.stats.flows++; logEv('flow', { from: k.id, to: tgt ? tgt[2] : -1, n: moved }); }
@@ -2370,7 +2379,7 @@ function updateBalls(dt) {
       p[1] += Math.sin(u * PI) * f.arc;
       b.x = p[0]; b.y = p[1]; b.z = p[2];
       spinBall(b, 0.08, f.p1[0] - f.p0[0], f.p1[2] - f.p0[2]);
-      if (u >= 1) catchBall(b, rk);
+      if (u >= 1 || f.t > f.T + 0.5 || !Number.isFinite(b.y)) { if (!Number.isFinite(b.y)) { b.x = f.p1[0]; b.y = f.p1[1]; b.z = f.p1[2]; } catchBall(b, rk); }
       return;
     }
     if (b.pick > 0) return; // being picked up (animated by kid)
@@ -2394,7 +2403,7 @@ function updateBalls(dt) {
     if (b.flowT > 0 && b.flowTo) {
       b.flowT -= dt;
       const dx = b.flowTo[0] - b.x, dz = b.flowTo[1] - b.z, d = Math.hypot(dx, dz);
-      if (d > 0.3) { ax += dx / d * 1.7; az += dz / d * 1.7; }
+      if (d > 0.3 && !(d < 0.45 && Math.hypot(b.vx, b.vz) < 0.4)) { ax += dx / d * 1.7; az += dz / d * 1.7; }
       else if (b.flowFrom >= 0 || b.deliverTo != null) {
         if (b.flowTo[2] >= 0 && b.flowTo[2] !== b.flowFrom && b.flowFrom >= 0) { Game.stats.flowArrivals++; logEv('flowArrive', { ball: b.i, to: b.flowTo[2], from: b.flowFrom }); AudioFX.plop(); }
         b.flowFrom = -1; b.flowT = 0; b.deliverTo = null;
@@ -2481,6 +2490,8 @@ function finishPick(k) {
   b.pick = 0;
   if (k.holding >= 0) { b.state = 'cloth'; b.vx = b.vz = 0; b.hop = 1; b.vy = 0.2; return; } // arms already full
   b.state = 'held'; b.owner = k.id; k.holding = b.i;
+  if (k.state === 'air' && k.air) k.air.thrown = true;
+  k.pickedAt = Game.t;
   AudioFX.pickBall();
   Game.stats.pickups++;
   if ((b.carryT != null && Game.t - b.carryT < 4) || b.deliverTo === k.id) { Game.stats.deliveries++; logEv('delivered', { ball: b.i, kid: k.id }); }
@@ -2515,15 +2526,17 @@ function throwBall(k) {
   Game.kids.forEach(o => {
     if (o === k || o === rk) return;
     const ax = p1[0] - p0[0], az = p1[2] - p0[2], L2 = ax * ax + az * az || 1;
-    const u = clamp(((o.x - p0[0]) * ax + (o.z - p0[2]) * az) / L2, 0, 1);
+    const u = ((o.x - p0[0]) * ax + (o.z - p0[2]) * az) / L2;
+    if (!(u > 0.08 && u < 0.92)) return; // only someone really standing in between
     const cx = p0[0] + ax * u, cz = p0[2] + az * u;
     if (Math.hypot(o.x - cx, o.z - cz) < 0.4) {
       const top = o.rootY + (o.seated ? 0.75 : 1.32) * o.def.scale + 0.25;
-      const base = lerp(p0[1], p1[1], u), lift = Math.sin(u * PI) || 0.1;
+      const base = lerp(p0[1], p1[1], u), lift = Math.max(Math.sin(u * PI), 0.35);
       arc = Math.max(arc, (top - base) / lift);
     }
   });
-  b.fly = { t: 0, T: 0.55 + d * 0.13 + Math.max(0, arc - 0.6) * 0.25, p0, p1, arc, to: rk.id, from: k.id };
+  arc = clamp(arc, 0.2, 1.2);
+  b.fly = { t: 0, T: Math.min(1.6, 0.55 + d * 0.13 + Math.max(0, arc - 0.6) * 0.25), p0, p1, arc, to: rk.id, from: k.id };
   k.holding = -1; k.throwT = 0.01;
   rk.excitedT = 1.0;
   AudioFX.throwBall();
@@ -2537,6 +2550,7 @@ function catchBall(b, rk) {
     return;
   }
   b.state = 'held'; b.owner = rk.id; rk.holding = b.i; b.fly = null;
+  if (rk.state === 'air' && rk.air) rk.air.thrown = true;
   rk.happyT = 1.6; rk.crouchV += 0.8;
   AudioFX.catchBall();
   emitSpark(b.x, b.y, b.z, b.col, 8);
@@ -2549,11 +2563,12 @@ function catchBall(b, rk) {
 // ===================================================================
 //  Ribbon (verlet strip hanging from a ring on a rope; rolls up while she sits)
 // ===================================================================
-function makeRibbon(x) {
+function makeRibbon(x, z) {
+  z = z == null ? KID_Z : z;
   const n = 10, seg = (3.05 - RIBBON_TIP) / (n - 1);
   const pts = [];
-  for (let i = 0; i < n; i++) pts.push({ p: [x, 3.05 - i * seg, KID_Z], o: [x, 3.05 - i * seg, KID_Z] });
-  return { x, tx: x, pts, seg0: seg, seg, twist: 0, touchT: 9, glow: 0, up: 0 };
+  for (let i = 0; i < n; i++) pts.push({ p: [x, 3.05 - i * seg, z], o: [x, 3.05 - i * seg, z] });
+  return { x, tx: x, z, tz: z, pts, seg0: seg, seg, twist: 0, touchT: 9, glow: 0, up: 0 };
 }
 function updateRibbon(dt) {
   const R = Game.ribbon;
@@ -2563,7 +2578,8 @@ function updateRibbon(dt) {
   R.seg = lerp(R.seg0, 0.025, R.up);
   R.x = damp(R.x, R.tx, 1.4, dt);
   const pts = R.pts;
-  pts[0].p = [R.x, 3.05, KID_Z];
+  R.z = damp(R.z, R.tz, 1.4, dt);
+  pts[0].p = [R.x, 3.05, R.z];
   const wind = Math.sin(Game.t * 0.7) * 0.03 + Math.sin(Game.t * 1.9) * 0.015;
   for (let i = 1; i < pts.length; i++) {
     const q = pts[i];
@@ -2598,7 +2614,7 @@ function checkRibbon(k) {
     const h = arm.hand;
     {
       const q = tip;
-      if (h[1] >= RIBBON_TIP - 0.03 && Math.hypot(h[0] - R.x, h[2] - KID_Z) < 0.32) {
+      if (h[1] >= RIBBON_TIP - 0.03 && Math.hypot(h[0] - R.x, h[2] - R.z) < 0.32) {
         a.ribbon = true;
         ribbonPoke(h, [0.3 * arm.sd, 1, 0.2], true);
         R.touchT = 0; R.glow = 1;
@@ -2668,7 +2684,7 @@ function fitFrame(points, pitch, fov, aspect, rect, yaw) {
   };
   for (let it = 0; it < 5; it++) {
     let lo = 0.8, hi = 60;
-    for (let s = 0; s < 30; s++) {
+    for (let s = 0; s < 18; s++) {
       const mid = (lo + hi) / 2;
       let ok = true;
       for (const p of points) {
@@ -2699,7 +2715,8 @@ function computeFrames() {
   const R = Game.ribbon;
   const rx = R ? R.tx : 0;
   const shortScreen = !side && H < 520; // phone held sideways: keep the children large, show less ceiling
-  base.push([rx, RIBBON_TIP + (shortScreen ? 0.15 : 0.42), KID_Z], [rx, RIBBON_TIP - 0.05, KID_Z]);
+  const rz = R ? R.tz : KID_Z;
+  base.push([rx, RIBBON_TIP + (shortScreen ? 0.15 : 0.42), rz], [rx, RIBBON_TIP - 0.05, rz]);
   { const g = Game.kids[0]; if (g && !g.seated && !shortScreen) base.push([g.baseX, RIBBON_TIP + 0.55, g.baseZ]); } // head room for the jump
   Game.kids.forEach(k => {
     const ux = k.state === 'ground' ? k.x : k.baseX, uz = k.state === 'ground' ? k.z : k.baseZ;
@@ -2733,7 +2750,14 @@ function computeFrames() {
 function updateCamera(dt, force) {
   Cam.refitT -= dt;
   const pressing = Game.trace && Game.trace.active;
-  if (!Cam.frames || force || (Cam.refitT <= 0 && !pressing)) { Cam.frames = computeFrames(); Cam.refitT = 0.6; }
+  if (!Cam.frames || force || (Cam.refitT <= 0 && !pressing)) {
+    Cam.refitT = 0.6;
+    const r2 = (v) => Math.round(v * 20);
+    const key = [Cam.W, Cam.H, Cam.safe.l, Cam.safe.t, Cam.safe.r, Cam.safe.b, r2(Game.ribbon ? Game.ribbon.tx : 0)].concat(
+      Game.kids.map(k => r2(k.state === 'ground' ? k.x : k.baseX) + ':' + r2(k.state === 'ground' ? k.z : k.baseZ) + (k.seated ? 's' : 'u')),
+      Game.balls.map(b => b.state === 'cloth' ? r2(b.x) + ':' + r2(b.z) : '-')).join(',');
+    if (force || key !== Cam.fitKey) { Cam.frames = computeFrames(); Cam.fitKey = key; }
+  }
   const e = Game.reveal; const t = e * e * (3 - 2 * e);
   const A = Cam.frames.narrow, B = Cam.frames.wide;
   const tgt = { T: V.lerp(A.T, B.T, t), d: lerp(A.d, B.d, t), pitch: lerp(A.pitch, B.pitch, t), fov: lerp(A.fov, B.fov, t), yaw: A.yaw };
@@ -2827,11 +2851,27 @@ function hitFreeBall(sx, sy) {
   }
   return null;
 }
+// the seam point at a child's feet that the viewer can actually see (on the camera side of her body)
+function kidSeamPoint(k, half) {
+  half = half || 0.12;
+  let cx = Cam.eye[0] - k.x, cz = Cam.eye[2] - k.z; const cl = Math.hypot(cx, cz) || 1; cx /= cl; cz /= cl;
+  const tx = k.x + cx * 0.3, tz = k.z + cz * 0.3;
+  let best = null;
+  for (const s of SEAMS) {
+    const t = clamp(seamParam(s, tx, tz), s.a + half, s.b - half);
+    const p = seamPoint(s, t);
+    const dk = Math.hypot(p[0] - k.x, p[1] - k.z);
+    if (dk > RANGE - 0.06) continue;
+    const front = (p[0] - k.x) * cx + (p[1] - k.z) * cz; // + = toward the viewer
+    const score = Math.hypot(p[0] - tx, p[1] - tz) - Math.min(front, 0.25) * 0.6;
+    if (!best || score < best.score) best = { s, t, x: p[0], z: p[1], score };
+  }
+  if (!best) { const s = nearestHSeamFor(k.z + 0.22); const t = seamParam(s, k.x, s.c); const p = seamPoint(s, t); best = { s, t, x: p[0], z: p[1] }; }
+  return best;
+}
 function footSnapFor(k) {
-  const s = nearestHSeamFor(k.z + 0.22);
-  const t = seamParam(s, k.x, s.c);
-  const p = seamPoint(s, t);
-  return { s, t, x: p[0], z: p[1], dpx: 0, score: 0 };
+  const b = kidSeamPoint(k, 0.05);
+  return { s: b.s, t: b.t, x: b.x, z: b.z, dpx: 0, score: 0 };
 }
 function markBins(tr, s, t0, t1) {
   const step = BIN * 0.5;
@@ -2866,6 +2906,7 @@ function inputDown(sx, sy) {
   Game.hopsSinceInput = 0;
   const hk = hitKid(sx, sy);
   const hb = hk ? null : hitFreeBall(sx, sy);
+  Game.downBody = hk && !hk.legs ? hk.k : null; Game.downBall = hb; Game.downXY = [sx, sy];
   let sn = snapSeam(sx, sy, null);
   // a child's body hides the cloth behind it: touching her legs presses the seam at her feet,
   // touching her upper body (or the ball in her arms) is only a small reaction; a free ball just hops
@@ -2900,7 +2941,13 @@ function startTrace(sn, sx, sy) {
 function inputMove(sx, sy) {
   const tr = Game.trace; if (!tr || !tr.active) return;
   Game.lastInput = Game.t;
-  if (tr.pending) { const sn = snapSeam(sx, sy, null); if (sn) startTrace(sn, sx, sy); return; }
+  if (tr.pending) {
+    // a touch that began on a child's body (or a ball) only becomes a trace once the finger has really left it
+    const dd = Game.downXY ? Math.hypot(sx - Game.downXY[0], sy - Game.downXY[1]) : 99;
+    if (Game.downBody) { if (dd < 24) return; const h2 = hitKid(sx, sy); if (h2 && (h2.k === Game.downBody || !h2.legs)) return; }
+    if (Game.downBall && dd < 14) return;
+    const sn = snapSeam(sx, sy, null); if (sn) startTrace(sn, sx, sy); return;
+  }
   if (tr.holdFired) { // after an auto-release, a new gesture starts once the finger moves on
     if (Math.hypot(sx - tr.sx, sy - tr.sy) > 40) { const sn = snapSeam(sx, sy, null); if (sn) startTrace(sn, sx, sy); }
     return;
@@ -2946,16 +2993,17 @@ function kidDist(k, bins) {
 function releaseTrace(tr, cancel) {
   const bins = coveredBins(tr);
   const L = bins.length * BIN;
-  if (cancel) { if (tr.live) { tr.live.life = Math.min(tr.live.life, tr.live.age + 1.0); } logEv('cancel', {}); return; }
+  if (cancel) { if (tr.live && !tr.live.used) removeSaucer(tr.live); logEv('cancel', {}); return; }
   const wide = L >= WIDE_L - 1e-6;
   const dirX = Math.sign(tr.dirX) || 0;
   const reach = (k) => RANGE + (k.seated ? 0.06 : 0);
   const inRange = Game.kids.filter(k => kidDist(k, bins) <= reach(k));
   // 1) a free ball being carried in the dent: deliver it gently, no jump
-  const carriedBall = !tr.startNearKid && Game.balls.find(b => b.state === 'cloth' && !b.pick && b.carry > 0.12 && Math.hypot(b.x - tr.x, b.z - tr.z) < 0.5);
+  const carriedBall = !tr.startNearKid && Game.balls.find(b => (b.state === 'cloth' || (b.state === 'held' && Game.t - (b.carryT || -9) < 2)) && b.carry > 0.12 && (b.pick || b.state === 'held' || Math.hypot(b.x - tr.x, b.z - tr.z) < 0.5) && Game.t - (b.carryT || -9) < 2);
   logEv('release', { L: +L.toFixed(2), wide, inRange: inRange.map(k => k.id), carried: !!carriedBall, crossed: tr.crossed[0] || tr.crossed[1] });
   if (carriedBall) {
     if (tr.live) removeSaucer(tr.live);
+    if (carriedBall.state !== 'cloth' || carriedBall.pick) { Game.stats.carries++; AudioFX.plop(); return; } // already being picked up
     const k = Game.kids.filter(k => k.seated && k.state === 'ground' && k.holding < 0 && k.pickBall < 0).sort((p, q) => Math.hypot(p.x - carriedBall.x, p.z - carriedBall.z) - Math.hypot(q.x - carriedBall.x, q.z - carriedBall.z))[0];
     if (k && Math.hypot(k.x - carriedBall.x, k.z - carriedBall.z) < 1.0) {
       carriedBall.flowTo = [k.x, k.z + 0.06, k.id]; carriedBall.flowT = 2.5; carriedBall.flowFrom = -1; carriedBall.deliverTo = k.id;
@@ -2996,7 +3044,7 @@ function releaseTrace(tr, cancel) {
   if (!set.length) { const n = nearestTo(tr.x, tr.z); if (n) set = [n]; }
   if (!set.length) set = inRange.sort((p, q) => kidDist(p, bins) - kidDist(q, bins)).slice(0, 1);
   if (!set.length) { AudioFX.boing(0.3, 0.12); logEv('emptyTap', {}); return; }
-  const ground = set.filter(k => k.state === 'ground');
+  const ground = set.filter(k => k.state === 'ground' && k.pickBall < 0 && Game.t - (k.pickedAt || -9) > 0.6);
   const air = set.filter(k => k.state === 'air');
   air.forEach(k => { k.queuedH = Math.max(k.queuedH || 0, 0.62); Game.stats.boosts++; Cl.boost = Math.max(Cl.boost, 2.5); logEv('queue', { kid: k.id }); });
   const solo = ground.length === 1;
@@ -3032,7 +3080,7 @@ function unrelatedTouch(sx, sy, body) {
     const p = project(q.p);
     if (Math.hypot(p[0] - sx, p[1] - sy) < 24) {
       ribbonPoke(q.p, [1, 0, 0.3], false); AudioFX.tick(0);
-      const g = Game.kids[0]; g.lookOverride = [R.x, RIBBON_TIP, KID_Z]; g.lookT = 0.8;
+      const g = Game.kids[0]; g.lookOverride = [R.x, RIBBON_TIP, R.z]; g.lookT = 0.8;
       logEv('unrelated', { what: 'ribbon' }); return;
     }
   }
@@ -3105,6 +3153,13 @@ function updateKid(k, dt) {
     if (Math.hypot(k.x - k.seatTo[0], k.z - k.seatTo[1]) < 0.01) k.seatTo = null;
   }
   k.sitAmt = damp(k.sitAmt, k.seated ? 1 : 0, k.seated ? 5.5 : 6.5, dt);
+  if (k.state === 'ground' && !k.seatTo) {
+    Game.kids.forEach(o => {
+      if (o === k || o.state !== 'ground') return;
+      const dx = k.x - o.x, dz = k.z - o.z, d = Math.hypot(dx, dz);
+      if (d < 0.6) { const push = Math.min(0.6 - d, 0.3 * dt) / (d || 1); k.x = clamp(k.x + (dx || 0.01) * push, -SEAT_X, SEAT_X); k.z = clamp(k.z + dz * push, SEAT_Z0, SEAT_Z1); if (k.seated) { k.baseX = k.x; k.baseZ = k.z; } }
+    });
+  }
   const prevY = k.rootY;
   const R = Game.ribbon;
   if (k.state === 'air') {
@@ -3166,7 +3221,8 @@ function updateKid(k, dt) {
   // children face the viewer, turning partly toward the one they pass with
   const baseYaw = Cam.yaw || 0;
   let yawT = baseYaw;
-  const other = k.holding >= 0 && k.partner >= 0 ? Game.kids[k.partner] : (k.reachFor || null);
+  let other = k.holding >= 0 && k.partner >= 0 ? Game.kids[k.partner] : (k.reachFor || null);
+  if (!other && k.state === 'air' && k.air.tag) other = Game.kids.find(o => o !== k && o.state === 'air' && o.air.tag === k.air.tag) || null;
   if (other) yawT = baseYaw + clamp(angDiff(Math.atan2(other.x - k.x, other.z - k.z), baseYaw) * 0.45, -0.75, 0.75);
   k.yaw = k.yaw + angDiff(yawT, k.yaw) * (1 - Math.exp(-4 * dt));
   const g = gazeTarget(k);
@@ -3176,8 +3232,12 @@ function updateKid(k, dt) {
   // keep the face toward the viewer: the head turns at most ~55° away from the camera and only dips a little;
   // the eyes do the rest of the look
   const camRel = angDiff(Math.atan2(Cam.eye[0] - k.x, Cam.eye[2] - k.z), k.yaw);
-  const yawC = clamp(clamp(yawG, -1.1, 1.1), camRel - 0.95, camRel + 0.95), pitC = clamp(pitG, -0.75, 0.65);
-  k.headYaw = damp(k.headYaw, yawC * 0.72, 7, dt); k.headPitch = damp(k.headPitch, Math.max(pitC * 0.6, -0.22), 7, dt);
+  const mutual = k.state === 'air' && k.air.tag && Game.kids.some(o => o !== k && o.state === 'air' && o.air.tag === k.air.tag);
+  const lim = mutual ? 1.35 : (k.seated ? 0.55 : 0.9);
+  const yawC = clamp(clamp(yawG, -1.1, 1.1), camRel - lim, camRel + lim), pitC = clamp(pitG, -0.75, 0.65);
+  const camEl = Math.atan2(Cam.eye[1] - hp[1], Math.hypot(Cam.eye[0] - hp[0], Cam.eye[2] - hp[2]));
+  const upBias = (Cam.yaw ? 0.22 : 0.08) * smooth(0.5, 1.0, camEl);
+  k.headYaw = damp(k.headYaw, mutual ? yawC : yawC * 0.72, 7, dt); k.headPitch = damp(k.headPitch, Math.max(pitC * 0.6, -0.22) + upBias, 7, dt);
   k.eyeYaw = damp(k.eyeYaw, clamp(yawG - k.headYaw, -0.45, 0.45), 14, dt);
   k.eyePitch = damp(k.eyePitch, clamp(pitG - k.headPitch, -0.42, 0.3), 14, dt);
   let sm = 0.38, op = 0;
@@ -3218,14 +3278,14 @@ function gazeTarget(k) {
   if (k.pickBall >= 0) { const b = Game.balls[k.pickBall]; return [b.x, b.y, b.z]; }
   if (tr && tr.active && tr.snapped) return [tr.x, clothH(tr.x, tr.z), tr.z];
   const R = Game.ribbon;
-  if (k.state === 'air' && underRibbon(k) && k.air.H > 0.5) return [R.x, RIBBON_TIP + 0.1, KID_Z];
+  if (k.state === 'air' && underRibbon(k) && k.air.H > 0.5) return [R.x, RIBBON_TIP + 0.1, R.z];
   const rolling = Game.balls.find(b => b.state === 'cloth' && Math.hypot(b.vx, b.vz) > 0.25 && Math.hypot(b.x - k.x, b.z - k.z) < 0.9);
   if (rolling) return [rolling.x, rolling.y, rolling.z];
   const flier = Game.kids.find(o => o !== k && o.state === 'air');
   if (flier) return kidHeadPos(flier);
   const inv = Game.invite;
   const ph = (k.time * 0.4 + k.id * 0.37) % 1;
-  if (k.id === 0 && !k.seated && ph < 0.4 && underRibbon(k)) return [R.x, RIBBON_TIP + 0.15, KID_Z];
+  if (k.id === 0 && !k.seated && ph < 0.4 && underRibbon(k)) return [R.x, RIBBON_TIP + 0.15, R.z];
   if (inv) { const c = seamPoint(inv.seam, (inv.a + inv.b) / 2); return [c[0], 0.25, c[1]]; }
   return [Cam.eye[0], 0.6, Cam.eye[2]];
 }
@@ -3244,14 +3304,40 @@ function updatePartners() {
 // ===================================================================
 function nearestHSeamFor(z) { let best = 0, bd = 1e9; SZ.forEach((c, i) => { const d = Math.abs(c - z); if (d < bd) { bd = d; best = i; } }); return SEAMS[best]; }
 function footInvite(k, half, kind) {
+  if (half < 0.3 && k.id != null) { // a short tap: the visible seam right at her feet
+    const p = kidSeamPoint(k, half);
+    return { seam: p.s, a: p.t - half, b: p.t + half, kind, kid: k.id, wide: false };
+  }
   const s = nearestHSeamFor(k.z + 0.22);
   const c = clamp(k.x, s.a + half, s.b - half);
   return { seam: s, a: c - half, b: c + half, kind, kid: k.id, wide: half * 2 >= WIDE_L - 0.05 };
 }
+// two neighbours that one long stroke along a horizontal seam can reach (both within range of it)
+function groupPairInvite(ground, prefer) {
+  let best = null;
+  for (let i = 0; i < ground.length; i++) for (let j = i + 1; j < ground.length; j++) {
+    const p = ground[i], q = ground[j];
+    if (Math.abs(p.x - q.x) > 1.6) continue;
+    for (const zs of SZ) {
+      const dp = Math.abs(zs - p.z), dq = Math.abs(zs - q.z);
+      if (dp > RANGE - 0.08 || dq > RANGE - 0.08) continue;
+      const sc = Math.abs(p.x - q.x) + dp + dq - (prefer && (p === prefer || q === prefer) ? 0.5 : 0);
+      if (!best || sc < best.sc) best = { sc, p, q, zs };
+    }
+  }
+  if (!best) return null;
+  const s = SEAMS[SZ.indexOf(best.zs)];
+  let a = Math.min(best.p.x, best.q.x) - 0.12, b = Math.max(best.p.x, best.q.x) + 0.12;
+  if (b - a < WIDE_L + 0.12) { const c = (a + b) / 2, h = (WIDE_L + 0.12) / 2; a = c - h; b = c + h; }
+  if (a < s.a) { b += s.a - a; a = s.a; } if (b > s.b) { a -= b - s.b; b = s.b; }
+  return { seam: s, a, b, kind: 'group', kid: best.p.id, wide: true };
+}
 function spanInvite(k1, k2, kind) {
   const s = nearestHSeamFor((k1.z + k2.z) / 2 + 0.22);
-  const a = Math.min(k1.x, k2.x) - 0.12, b = Math.max(k1.x, k2.x) + 0.12;
-  return { seam: s, a: Math.max(a, s.a), b: Math.min(b, s.b), kind, kid: k1.id, wide: true };
+  let a = Math.min(k1.x, k2.x) - 0.12, b = Math.max(k1.x, k2.x) + 0.12;
+  if (b - a < WIDE_L + 0.12) { const c = (a + b) / 2, h = (WIDE_L + 0.12) / 2; a = c - h; b = c + h; } // always a long, soft stroke
+  if (a < s.a) { b += s.a - a; a = s.a; } if (b > s.b) { a -= b - s.b; b = s.b; }
+  return { seam: s, a, b, kind, kid: k1.id, wide: true };
 }
 function ballRoute(b, k) {
   let best = null;
@@ -3305,7 +3391,7 @@ function computeInvite() {
   const chainOn = (airK.some(k => k.air.cause === 'chain') || pend);
   // a chain is bouncing: one fixed wide catch under the protagonist (or whoever is in it)
   if (!chainOn) Game.chainCatch = null;
-  if (chainOn && st.chainLaunches >= 2 && st.chainAbsorbs < 2) {
+  if (chainOn && st.chainAbsorbs < 2) {
     if (!Game.chainCatch) {
       const k = [girl].concat(K).find(k => k.state === 'air' || k.pending) || girl;
       const fk = { x: k.air ? k.air.x1 : k.x, z: k.air ? k.air.z1 : k.z };
@@ -3319,9 +3405,17 @@ function computeInvite() {
   const seatedAll = ground.filter(k => k.seated);
   const holder = ground.find(k => k.holding >= 0 && k.partner >= 0 && k.pickBall < 0);
   // 1. the ribbon (each cycle)
-  if (girl.state === 'ground' && !girl.seated && st.ribbon <= (Game.cycleRibbon || 0)) return footInvite(girl, 0.12, 'ribbon');
+  if (girl.state === 'ground' && !girl.seated && st.ribbon <= (Game.cycleRibbon || 0)) {
+    if (girl.reposition || girl.seatTo) return null; // she is still getting under it
+    if (!underRibbon(girl)) {
+      // the ribbon is her goal this round: it slides over to just above her
+      Game.ribbon.tx = clamp(girl.x, -1.5, 1.5); Game.ribbon.tz = clamp(girl.z, -0.85, 0.75);
+      return null;
+    }
+    return footInvite(girl, 0.12, 'ribbon');
+  }
   // 2. give the hop across a boundary
-  if (st.chainLaunches === 0) {
+  if (st.chainLaunches === 0 && !pend) {
     const src = (!girl.seated && girl.state === 'ground') ? girl : ground[0];
     if (src) {
       let nb = null; K.forEach(o => { if (o !== src && (!nb || Math.abs(o.x - src.x) < Math.abs(nb.x - src.x))) nb = o; });
@@ -3334,12 +3428,29 @@ function computeInvite() {
       }
     }
   }
+  // from the second round on, each round features one other discovery again
+  if (st.cycles >= 1 && Game.cycStart) {
+    const done = (k) => st[k] > (Game.cycStart[k] || 0);
+    const feat = ['groupHops', 'chainLaunches', 'deliveries', 'flowArrivals'][st.cycles % 4];
+    if (!done(feat)) {
+      if (feat === 'groupHops') {
+        const gi = groupPairInvite(ground, girl);
+        if (gi) return gi;
+      } else if (feat === 'chainLaunches' && !girl.seated && girl.state === 'ground') {
+        const s = nearestHSeamFor(girl.z + 0.22), side = girl.x > 0 ? -1 : 1;
+        const bx = side > 0 ? BOUNDS.find(b => b > girl.x) : [...BOUNDS].reverse().find(b => b < girl.x);
+        if (bx != null) { const a = girl.x, b = bx + side * 0.14; return { seam: s, a: Math.min(a, b), b: Math.max(a, b), kind: 'cross', kid: 0, wide: false, from: a, to: b }; }
+      } else if (feat === 'deliveries') { const dv0 = deliverInvite(ground); if (dv0) return dv0; }
+      else if (feat === 'flowArrivals' && seatedAll.length >= 2) {
+        const bowl = seatedAll.find(k => Game.balls.some(b => b.state === 'cloth' && !b.pick && Math.hypot(b.x - k.x, b.z - k.z) < 0.5));
+        if (bowl && seatedAll.some(o => o !== bowl && o.holding < 0)) return footInvite(bowl, 0.12, 'flow');
+      }
+    }
+  }
   // 3. two neighbours hop low together
   if (st.groupHops === 0) {
-    const sorted = ground.slice().sort((p, q) => p.x - q.x);
-    let pair = null;
-    for (let i = 0; i + 1 < sorted.length; i++) { const d = Math.abs(sorted[i + 1].x - sorted[i].x); if (d < 1.6 && (!pair || (sorted[i] === girl || sorted[i + 1] === girl))) pair = [sorted[i], sorted[i + 1]]; }
-    if (pair) return spanInvite(pair[0], pair[1], 'group');
+    const gi = groupPairInvite(ground, girl);
+    if (gi) return gi;
   }
   // 4. pass and throw back (twice), and at least one catch every round
   if (holder && (st.passes < 2 || (Game.cyclePasses || 0) < 1)) return footInvite(holder, 0.12, 'pass');
@@ -3424,35 +3535,33 @@ function stepVisual() {
 // ===================================================================
 function updateBreath(dt) {
   const B = Game.breath, K = Game.kids;
-  const calm = (Game.cyclePasses || 0) >= 1 && K.every(k => k.seated && k.state === 'ground' && k.holding >= 0 && k.pickBall < 0) && !Game.packets.length && !Game.trace;
+  const calm = K.every(k => k.seated && k.state === 'ground' && k.holding >= 0 && k.pickBall < 0) && !Game.packets.length && !Game.trace;
   if (B.t < 0) {
     B.wait = calm ? B.wait + dt : 0;
     if (B.wait > 1.2) {
       B.t = 0; B.wait = 0;
       AudioFX.breath();
       K.forEach(k => { k.happyT = 3.4; });
-      Game.stats.cycles++;
       logEv('breath', {});
     }
   } else {
     const prev = B.t; B.t += dt;
     [0.4, 1.1, 1.9].forEach((tt, i) => { if (prev < tt && B.t >= tt) { const k = K[i % 3]; AudioFX.giggle(clamp(k.x / 2, -1, 1)); k.wiggleT = 0.5; emitSpark(k.x, k.rootY + 0.75, k.z, hex(0xfff0c8), 5); } });
-    if (K.some(k => k.state === 'air')) { B.t = -1; return; }
-    if (B.t > 3.6) { B.t = -1; restartCycle(); }
+    if (B.t > 3.6 && K[0].state === 'ground') { B.t = -1; restartCycle(); }
   }
 }
 function restartCycle() {
   const g = Game.kids[0];
+  Game.stats.cycles++;
+  Game.cycStart = Object.assign({}, Game.stats); // per-round discoveries
   if (g.holding >= 0) {
     const b = Game.balls[g.holding];
     g.holding = -1;
     b.state = 'cloth'; b.owner = -1; b.x = clamp(g.x + 0.32, -BALL_X, BALL_X); b.z = clamp(g.z + 0.14, -BALL_Z, BALL_Z); b.vx = 0.15; b.vz = 0.05; b.hop = 1; b.vy = 0.3;
   }
   g.seated = false; g.happyT = 1.2;
-  // stand up, then a little hop back under the ribbon's rope
-  const p = nearestFree(g.x, KID_Z, g, 0.74);
-  Game.ribbon.tx = clamp(p[0], -1.5, 1.5);
-  g.reposition = { x: p[0], z: p[1], t: 0.55 };
+  // she stands up where she sat; the ribbon slides over to just above her raised hand
+  Game.ribbon.tx = clamp(g.x, -1.5, 1.5); Game.ribbon.tz = clamp(g.z, -0.85, 0.75);
   Game.cycleRibbon = Game.stats.ribbon;
   Game.cyclePasses = 0;
   logEv('cycle', { n: Game.stats.cycles });
@@ -3485,7 +3594,7 @@ function validSave(d) {
     if (!k || typeof k !== 'object' || !fin(k.x) || !fin(k.z) || typeof k.seated !== 'boolean') return false;
     if (Math.abs(k.x) > SEAT_X + 1e-6 || k.z < SEAT_Z0 - 1e-6 || k.z > SEAT_Z1 + 1e-6) return false;
   }
-  for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) if (Math.hypot(d.kids[i].x - d.kids[j].x, d.kids[i].z - d.kids[j].z) < 0.55) return false;
+  for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) if (Math.hypot(d.kids[i].x - d.kids[j].x, d.kids[i].z - d.kids[j].z) < 0.3) return false;
   const seen = new Set();
   for (const o of d.owner) {
     if (!(o === -1 || o === 0 || o === 1 || o === 2)) return false;
@@ -3527,8 +3636,11 @@ function setupWorld(save) {
     if (o === 0) { b.x = clamp(k.x + 0.32, -BALL_X, BALL_X); b.z = clamp(k.z + 0.14, -BALL_Z, BALL_Z); return; } // the poised protagonist sets hers down beside her
     b.state = 'held'; b.owner = o; k.holding = i; k.hold = 1;
   });
+  // keep restored seats comfortably apart
+  for (let it = 0; it < 2; it++) Game.kids.forEach(k => { const p = nearestFree(k.x, k.z, k, 0.74); k.x = k.baseX = p[0]; k.z = k.baseZ = p[1]; });
+  Game.balls.forEach(b => { if (b.state === 'held') { /* follows owner */ } });
   Game.stats.cycles = save && typeof save.cycles === 'number' ? save.cycles : 0;
-  Game.ribbon = makeRibbon(clamp(Game.kids[0].x, -1.5, 1.5));
+  Game.ribbon = makeRibbon(clamp(Game.kids[0].x, -1.5, 1.5), clamp(Game.kids[0].z, -0.85, 0.75));
   for (let i = 0; i < 300; i++) { Cl.f.fill(0); kidForces(); clothStep(1 / 120); }
   Game.kids.forEach(k => { k.rootY = clothH(k.x, k.z); });
   Game.balls.forEach(b => { b.y = clothH(b.x, b.z) + b.r * 0.92; });
@@ -3573,6 +3685,9 @@ function makeShadowTarget() {
 }
 function initGL() {
   R.ok = false;
+  // extensions must be enabled again on a restored context
+  GLX.deriv = gl.getExtension('OES_standard_derivatives');
+  GLX.uint = gl.getExtension('OES_element_index_uint');
   R.P.env = program(VS_ENV, FS_ENV);
   R.P.cloth = program(VS_CLOTH, FS_CLOTH);
   R.P.body = program(VS_BODY, FS_BODY);
@@ -3710,7 +3825,8 @@ function drawScene() {
   });
   // ribbon ring
   { const q = Game.ribbon.pts[0].p; ellItem(q, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], 0.03, 0.03, 0.03, 7, hex(0xd8c070), list, MESH.sphereLo); }
-  let lastMesh = null, lastTex = null;
+  list.sort((p, q) => (p.mesh.vbo === q.mesh.vbo ? 0 : (MESH_ORDER(p.mesh) - MESH_ORDER(q.mesh))));
+  let lastMesh = null, lastTex = null, lastKind = -1, lastTexOn = -1;
   for (const it of list) {
     if (it.mesh !== lastMesh) { bindMesh(it.mesh); lastMesh = it.mesh; }
     gl.uniformMatrix4fv(U.u_model, false, it.m);
@@ -3718,14 +3834,18 @@ function drawScene() {
     gl.uniform3f(U.u_cap, it.cap[0], it.cap[1], it.cap[2]);
     gl.uniform3fv(U.u_color, it.color);
     gl.uniform3fv(U.u_color2, it.color2 || it.color);
-    gl.uniform1f(U.u_kind, it.kind);
-    if (it.tex) { if (lastTex !== it.tex) { gl.bindTexture(gl.TEXTURE_2D, it.tex); lastTex = it.tex; } gl.uniform1f(U.u_texOn, 1); }
-    else gl.uniform1f(U.u_texOn, 0);
+    if (it.kind !== lastKind) { gl.uniform1f(U.u_kind, it.kind); lastKind = it.kind; }
+    const tOn = it.tex ? 1 : 0;
+    if (it.tex && lastTex !== it.tex) { gl.bindTexture(gl.TEXTURE_2D, it.tex); lastTex = it.tex; }
+    if (tOn !== lastTexOn) { gl.uniform1f(U.u_texOn, tOn); lastTexOn = tOn; }
     drawMesh(it.mesh);
   }
   drawRibbon(U);
   drawParticles();
 }
+const ID4 = M4.create(), ID3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+let _meshIds = new Map();
+function MESH_ORDER(m) { let v = _meshIds.get(m); if (v == null) { v = _meshIds.size; _meshIds.set(m, v); } return v; }
 function drawRibbon(U) {
   const Rb = Game.ribbon, pts = Rb.pts, n = pts.length, v = R.ribbonVerts;
   const w = 0.05;
@@ -3749,8 +3869,8 @@ function drawRibbon(U) {
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, R.ribbon.vbo); gl.bufferSubData(gl.ARRAY_BUFFER, 0, v);
   bindMesh(R.ribbon);
-  gl.uniformMatrix4fv(U.u_model, false, M4.create());
-  gl.uniformMatrix3fv(U.u_nmat, false, new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+  gl.uniformMatrix4fv(U.u_model, false, ID4);
+  gl.uniformMatrix3fv(U.u_nmat, false, ID3);
   gl.uniform3f(U.u_cap, 0, 0, 0);
   const rc = hex(0xe0283e);
   gl.uniform3fv(U.u_color, rc); gl.uniform3fv(U.u_color2, rc);
@@ -3826,7 +3946,8 @@ function makeHand() {
 let overlayDirty = false;
 function drawOverlay() {
   const D = Game.demo;
-  if (!D.on || !D.seg) { if (overlayDirty) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height); overlayDirty = false; } return; }
+  if (!D.on || !D.seg) { if (overlayDirty) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height); overlayDirty = false; overlay.style.display = 'none'; } return; }
+  if (overlay.style.display === 'none') overlay.style.display = 'block';
   if (!HAND) HAND = makeHand();
   const dpr = overlay.width / Math.max(1, Cam.W);
   octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height);
@@ -3889,7 +4010,7 @@ function adaptResolution(frameMs, now) {
   if (F.length < 90 || now - Res.lastChange < 2500) return;
   const sorted = F.slice().sort((a, b) => a - b), med = sorted[45];
   const locked30 = Math.abs(med - 33.3) < 1.5 && sorted[10] > 31; // low-power 30 Hz cap, not GPU load
-  const floor = Math.min(1.25, Res.maxScale);
+  const floor = Math.min(1.0, Res.maxScale);
   if (med > 18.5 && !locked30 && Res.scale > floor) {
     const next = SCALES.find(x => x < Res.scale - 0.01) || floor;
     Res.scale = Math.max(floor, next); Res.lastChange = now; F.length = 0; applyScale(); logEv('res', { s: Res.scale });
@@ -4032,7 +4153,7 @@ window.addEventListener('resize', () => { resize(false); requestAnimationFrame((
 window.addEventListener('orientationchange', () => setTimeout(() => resize(true), 120));
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => resize(false));
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); R.ok = false; stopLoop(); }, false);
-canvas.addEventListener('webglcontextrestored', () => { try { initGL(); resize(true); startLoop(); } catch (e) { Game.lastError = String(e); } }, false);
+canvas.addEventListener('webglcontextrestored', () => { try { initGL(); resize(true); startLoop(); } catch (e) { Game.lastError = String(e); document.getElementById('fallback').style.display = 'block'; } }, false);
 
 // ===================================================================
 //  Test / inspection hooks (read-mostly; no UI)
