@@ -1265,6 +1265,7 @@ function releaseOven(serve){
   // spring back bounce
   for(const i of band.list){P.liftV[i]+=0.35*(1-P.bake[i]);}
   BANDS.push(band);
+  if(!serve){let any=false;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.z[i]>0.6||(P.z[i]>0.43&&Math.abs(P.x[i])>0.55)){any=true;break;}}if(any)G.retract=0.6;}
   const joinsBefore=countJoins();
   makeWelds(band.list);
   if(countJoins()>joinsBefore){ // a join: keep the loop shape (no spring-back)
@@ -2406,11 +2407,14 @@ function onCancel(e){
 function updateDragTarget(){
   if(!DRAG.active||DRAG.demo)return;
   const w=screenToSurface(clamp(PTR.x,-200,CAM.cssW+200),clamp(PTR.y,-200,CAM.cssH+200),0.035);
+  if(DRAG.mode==='oven'){const pl=LAY.plate;const toPlate=Math.hypot(w[0]-pl.x,w[1]-pl.z)<pl.r*1.15;
+    if(!toPlate){const I=WL.inner;const cx=clamp(w[0],I.x0+0.03,I.x1-0.03),cz=clamp(w[1],I.z0+0.03,0.58);
+      const ox=w[0]-cx,oz=w[1]-cz;const ol=Math.hypot(ox,oz);if(ol>1e-6){const g=0.06*(1-Math.exp(-ol/0.06));w[0]=cx+ox/ol*g;w[1]=cz+oz/ol*g;}}}
   DRAG.G[0]=w[0];DRAG.G[1]=w[1];DRAG.fingerMax=Math.max(DRAG.fingerMax||0,Math.hypot(w[0]-DRAG.G0[0],w[1]-DRAG.G0[1]));
   let sx=0,sz=0;if(DRAG.mode==='oven'&&DRAG.snapOff){const f=sstep(0,0.22,TIME.t-DRAG.t0);sx=-DRAG.snapOff[0]*f;sz=-DRAG.snapOff[1]*f;}
   DRAG.D[0]=w[0]-DRAG.G0[0]+sx;DRAG.D[1]=w[1]-DRAG.G0[1]+sz;
   // limit
-  const dm=Math.hypot(DRAG.D[0],DRAG.D[1]);if(dm>1.6){DRAG.D[0]*=1.6/dm;DRAG.D[1]*=1.6/dm;}
+  const dm=Math.hypot(DRAG.D[0],DRAG.D[1]);if(dm>1.1){DRAG.D[0]*=1.1/dm;DRAG.D[1]*=1.1/dm;}
 }
 canvas.addEventListener('pointerdown',onDown,{passive:false});
 W.addEventListener('pointermove',onMove,{passive:false});
@@ -2481,6 +2485,10 @@ function update(dt){
     }
     computeDerived();
     pocketUpdate(dt);
+    if(G.retract>0&&!DRAG.active){G.retract-=dt;simAwake=Math.max(simAwake,0.3);let moved=false;
+      for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const tz=Math.min(P.z[i],0.58),tx=P.z[i]>0.43?clamp(P.x[i],-0.53,0.53):P.x[i];
+        if(tz!==P.z[i]||tx!==P.x[i]){const k=Math.min(1,dt*9);P.x[i]+=(tx-P.x[i])*k;P.z[i]+=(tz-P.z[i])*k;P.px[i]=P.x[i];P.pz[i]=P.z[i];moved=true;}}
+      if(!moved||G.retract<=0){G.retract=0;for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;const a=ED.a[e],b=ED.b[e];if(P.z[a]>0.4||P.z[b]>0.4)ED.rest[e]=Math.min(ED.rest[e],Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a])*1.02);}}}
     if(RING.checkAt&&TIME.t>RING.checkAt){RING.checkAt=0;ringCheck();}
     if(RING.expand>0&&!DRAG.active){RING.expand-=dt;simAwake=Math.max(simAwake,0.3);
       for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const dx=P.x[i]-RING.ex,dz=P.z[i]-RING.ez;const d=Math.hypot(dx,dz);if(d>0.13||d<1e-4)continue;
@@ -2693,10 +2701,10 @@ function resize(){
   if(Math.abs(d.dx)+Math.abs(d.dz)>1e-6||Math.abs(d.sr-1)>1e-6||wasPortrait!==LAY.portrait||!GF.sup){
     if(gl&&MESH.table)buildPlate();
     if(GF.sup)computeSupportGrid();
-    if(G.phase==='plate'||G.phase==='serve'){for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const pl=LAY.plate;
+    if(G.phase==='plate'){const pl=LAY.plate;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
         const ox=P.x[i]-(pl.x-d.dx),oz=P.z[i]-(pl.z-d.dz);P.x[i]=pl.x+ox*d.sr;P.z[i]=pl.z+oz*d.sr;P.px[i]=P.x[i];P.pz[i]=P.z[i];P.ex[i]+=d.dx;P.ez[i]+=d.dz;}
-      for(let k=0;k<CH.n;k++){CH.x[k]+=d.dx;CH.z[k]+=d.dz;}
-      if(G.serveMap){G.serveMap.tx=LAY.plate.x;G.serveMap.tz=LAY.plate.z;}}
+      for(let k=0;k<CH.n;k++){CH.x[k]=pl.x+(CH.x[k]-(pl.x-d.dx))*d.sr;CH.z[k]=pl.z+(CH.z[k]-(pl.z-d.dz))*d.sr;}}
+    else if(G.phase==='serve'&&G.serveMap){G.serveMap.tx=LAY.plate.x;G.serveMap.tz=LAY.plate.z;G.serveMap.s*=d.sr;}
   }
   const dg=LAY.dog;LAY.dogZone={x:dg.x+Math.sin(dg.yaw)*0.22,z:dg.z+Math.cos(dg.yaw)*0.22-0.02,r:0.17};
   DOG.x=dg.x;DOG.z=dg.z;DOG.yaw=dg.yaw;
@@ -2708,7 +2716,7 @@ W.addEventListener('resize',()=>{resize();resizeT=3;});
 W.addEventListener('orientationchange',()=>{setTimeout(resize,60);setTimeout(resize,350);});
 D.addEventListener('visibilitychange',()=>{
   if(D.hidden){running=false;cancelAnimationFrame(rafId);if(DRAG.active)endDrag(true);if(DEMO.active)cancelDemo();PTR.id=-1;SND.stretchOff&&SND.stretchOff();SND.sizzle(0);SND.suspend();}
-  else{if(!running){running=true;lastTs=0;rafId=requestAnimationFrame(frame);}}
+  else{if(!running){running=true;lastTs=0;rafId=requestAnimationFrame(frame);}try{SND.unlock();}catch(e){}}
 });
 W.addEventListener('pagehide',()=>{if(DRAG.active)endDrag(true);});
 W.addEventListener('blur',()=>{if(DRAG.active&&!DRAG.demo){endDrag(true);PTR.id=-1;}});
