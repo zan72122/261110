@@ -4108,6 +4108,7 @@ const MAT = {
   wiper: new T.MeshLambertMaterial({ map: TEX.wiper }),
   water: new T.MeshStandardMaterial({ color: 0xcfeaff, transparent: true, opacity: 0.55, roughness: 0.0, metalness: 0.5, envMapIntensity: 3, depthWrite: false }),
   shuFloor: new T.MeshPhongMaterial({ color: 0x9c2f1f, specular: 0x5a3a30, shininess: 60 }),
+  claspPaddle: new T.MeshPhongMaterial({ color: 0xe8743a, specular: 0x555555, shininess: 60 }),
   clasp: new T.MeshPhongMaterial({ color: 0x8fd0e8, specular: 0x666666, shininess: 70 }),
   claspBase: new T.MeshPhongMaterial({ color: 0xd9eef5, specular: 0x444444, shininess: 50 }),
   shadowCatcher: new T.ShadowMaterial({ opacity: 0.18 }),
@@ -4588,7 +4589,7 @@ function makeClasp() {
   const lipm = mesh(new T.BoxGeometry(2.6, 0.36, 0.95), MAT.clasp); lipm.position.set(0, 2.62, -0.3); hook.add(lipm);
   const pin = mesh(new T.CylinderGeometry(0.16, 0.16, 3.0, 8), MAT.metal); pin.rotation.z = Math.PI / 2; hingePivot.add(pin);
   // release paddle that a ball on the lower road knocks
-  const pad = mesh(new T.BoxGeometry(0.55, 1.6, 0.22), MAT.knob); pad.position.set(1.55, -0.4, 0.5); hook.add(pad);
+  const pad = mesh(new T.BoxGeometry(0.55, 1.6, 0.22), MAT.claspPaddle); pad.position.set(1.55, -0.4, 0.5); hook.add(pad);
   g.userData = { hingePivot };
   return g;
 }
@@ -4977,7 +4978,7 @@ const Y_CUP = 3.75;           // ball centre resting in a rim cup
 const Y_Q = 11.0;             // ball centre at the fork gate
 const Y_CLOTH = BALL_R;       // ball centre rolling on the cloth
 const TRAY_C = V3(0, 0, -3);
-const SEE = { p: V3(0, 3.0, -13.5), half: 6.5, amp: 0.09, cupY: 1.4 };
+const SEE = { p: V3(0, 3.0, -13.5), half: 6.5, amp: 0.115, cupY: 1.4 };
 const FORK = V3(0, Y_Q, 14);
 const LIFT_P = V3(6.6, 0, 15.6);
 
@@ -5180,7 +5181,7 @@ world.lever = (() => {
   // gate
   const gatePivot = new T.Group(); gatePivot.position.set(0, 1.9, -0.5); g.add(gatePivot);
   const gate = mesh(new T.BoxGeometry(2.0, 0.25, 1.0), MAT.brass); gate.position.set(0, 0, -0.3); gatePivot.add(gate);
-  return { group: g, axle, knobG, knob, plate, gatePivot, angle: new Spring(0, 520, 16), bend: new Spring(0, 900, 22), bounce: new Spring(0, 260, 9), dir: 'L' };
+  return { group: g, axle, knobG, knob, plate, gatePivot, angle: new Spring(0, 520, 16), bend: new Spring(0, 900, 22), bounce: new Spring(0, 260, 9), press: new Spring(0, 700, 30), dir: 'L' };
 })();
 function knobWorld(out = new T.Vector3()) { world.lever.knobG.updateWorldMatrix(true, false); return out.setFromMatrixPosition(world.lever.knobG.matrixWorld); }
 
@@ -5336,6 +5337,7 @@ const G = {
   log: [],             // discovery / event log (for tests)
   round: 1,
   lastSend: -99,
+  sends: [],
 };
 function logEvent(type, info = {}) { G.log.push(Object.assign({ t: +Clock.t.toFixed(2), type, mode: G.mode }, info)); if (G.log.length > 400) G.log.shift(); }
 
@@ -5413,7 +5415,7 @@ function setDir(d, flick = true) {
   if (d !== 'L' && d !== 'R') return;
   const changed = G.dir !== d;
   G.dir = d; Store.save(d);
-  const s = d === 'L' ? 1 : -1; // rotation about y: +angle swings knob toward -x (left)
+  const s = d === 'L' ? -1 : 1; // rotation about y: the knob sits in front (+z), so -angle swings it to screen-left
   world.lever.angle.target = s * LEVER_REST;
   if (flick) world.lever.angle.kick(s * 7.5);
   if (changed) Sound.swing();
@@ -5534,6 +5536,9 @@ function homePath(p) {
     pts.push(V3(-3.2, y, LANE.F - 1.2), V3(0.5, y, LANE.F), V3(4.0, y, LANE.F - 0.6), scoop);
   } else if (last.x > 12.5) {
     pts.push(V3(Math.max(last.x, 20.5), y, Math.max(last.z, 7.5)), V3(20.5, y, 13.3), V3(12.5, y, 14.4), scoop);
+  } else if (G.mode === 'spread' || G.mode === 'gathering') {
+    const x = Math.max(last.x, 9.4);
+    pts.push(V3(x, y, Math.min(Math.max(last.z, 2.8), 4.0)), V3(7.8, y, 5.6), V3(7.8, y, 12.6), scoop);
   } else {
     pts.push(V3(Math.max(last.x, 9.4), y, 12.2), scoop);
   }
@@ -5586,6 +5591,8 @@ function trySend(d) {
   if (!canSend()) { logEvent('sendBlocked', { d }); return false; }
   const ball = G.queue.shift();
   G.busy = true; G.lastSend = Clock.t;
+  G.sends.push(d); if (G.sends.length > 8) G.sends.shift();
+  Hint.demoShown = false;
   logEvent('send', { d, ball: ball.id });
   // gate lifts
   const gp = world.lever.gatePivot;
@@ -5608,7 +5615,6 @@ function trySend(d) {
 
 // one ball arrives above a stub tip, drops, then rides the lid or falls into the cup.
 async function arriveAtStub(ball, c, k, fromAbove = true) {
-  if (fromAbove) await dropTo(ball, stubTip(c, k).add(V3(0, c.open ? 0.0 : 0, 0)), !c.open, 1.1);
   if (c.open && !c.busy) {
     await dropTo(ball, cupWorld(c, k), true, 0.9);
     ball.loc = 'cup';
@@ -5618,6 +5624,7 @@ async function arriveAtStub(ball, c, k, fromAbove = true) {
     goHome(ball);
     return 'closed';
   }
+  if (fromAbove) await dropTo(ball, stubTip(c, k), true, 1.1);
   return 'cross';
 }
 
@@ -5968,7 +5975,7 @@ async function nextBento(bento) {
 // ===================================================================
 // Hints: bouncing lever when a ball waits; hand demo after ~4 s idle
 // ===================================================================
-const Hint = { demoShown: false, lastIdleStart: 0, glow: 0 };
+const Hint = { demoShown: false, readySince: -1, glow: 0, flash: 0 };
 function hintUpdate(dt) {
   // safety: a ball waiting in the second slot always rolls up to the gate
   if (G.queue.length && !G.queue[0].moving && G.queue[0].pos.distanceTo(Q0) > 0.2 && (G.mode === 'spread' || G.mode === 'gathered')) advanceQueue();
@@ -5976,25 +5983,29 @@ function hintUpdate(dt) {
   const lv = world.lever;
   if (ready && !Input.active && !Hand.playing) {
     const ph = (Clock.t * 0.65) % 1;
-    if (ph < 0.02 && lv.bounce.x < 0.05) lv.bounce.kick(5.5);
+    if (ph < 0.02 && lv.bounce.x < 0.05) lv.bounce.kick(6.5);
   }
   lv.bounce.target = 0;
-  // idle demo once per idle period
-  const idle = Input.idleFor();
+  // idle demo: once per idle period, only after ~4 s of a ball waiting untouched
+  if (ready && Hint.readySince < 0) Hint.readySince = Clock.t;
+  if (!ready) Hint.readySince = -1;
+  const idle = Math.min(Input.idleFor(), ready ? Clock.t - Hint.readySince : 0);
   if (ready && idle > 4.0 && !Hint.demoShown && !Hand.playing && !Input.active) {
     Hint.demoShown = true;
-    const d = G.dir;
+    // after several sends the same way, show the other way so both roads get discovered
+    const last = G.sends.slice(-3);
+    const d = last.length === 3 && last.every(x => x === last[0]) ? (last[0] === 'L' ? 'R' : 'L') : G.dir;
     Hand.play(() => {
       const p = knobWorld().project(camera);
       return [(p.x * 0.5 + 0.5) * window.innerWidth, (-p.y * 0.5 + 0.5) * window.innerHeight];
     }, d === 'L' ? -1 : 1, (ph, k) => {
       if (ph === 'press') lv.bend.target = 0.6;
-      else if (ph === 'flick') { lv.bend.target = 0; lv.angle.target = (d === 'L' ? 1 : -1) * (LEVER_REST + 0.2 * (k || 0)); }
-      else if (ph === 'hold' || ph === 'stop') { lv.angle.target = (G.dir === 'L' ? 1 : -1) * LEVER_REST; lv.bend.target = 0; }
+      else if (ph === 'flick') { lv.bend.target = 0; lv.angle.target = (d === 'L' ? -1 : 1) * (LEVER_REST + 0.2 * (k || 0)); }
+      else if (ph === 'hold' || ph === 'stop') { lv.angle.target = (G.dir === 'L' ? -1 : 1) * LEVER_REST; lv.bend.target = 0; }
     });
   }
 }
-Input.on('any', () => { Hint.demoShown = false; if (Hand.playing) Hand.stop(); });
+Input.on('any', () => { if (Hand.playing) Hand.stop(); });
 
 // ===================================================================
 // Input wiring
@@ -6019,6 +6030,7 @@ Input.on('leverHit', (x, y) => {
 });
 Input.on('press', (lv) => {
   lv.bend.kick(-9); lv.bend.target = 0.35;
+  lv.press.target = 1; lv.press.kick(14); Hint.flash = 1;
   Sound.click(1);
   world.lever.plateJig = 1;
   logEvent('leverPress');
@@ -6027,19 +6039,19 @@ const FLICK_PX = 24, TAP_PX = 6;
 Input.on('drag', (lv, dx, dy, a) => {
   if (a.fired) return;
   const s = Math.max(-1, Math.min(1, dx / 60));
-  lv.angle.target = -s * (LEVER_REST + 0.25);
+  lv.angle.target = s * (LEVER_REST + 0.25);
   if (Math.abs(dx) >= FLICK_PX) { a.fired = true; fire(dx < 0 ? 'L' : 'R'); }
 });
 Input.on('release', (lv, dx, a) => {
-  lv.bend.target = 0;
+  lv.bend.target = 0; lv.press.target = 0;
   if (!a.fired) {
     const d = Math.abs(dx) >= TAP_PX ? (dx < 0 ? 'L' : 'R') : G.dir;
     fire(d);
   } else {
-    lv.angle.target = (G.dir === 'L' ? 1 : -1) * LEVER_REST;
+    lv.angle.target = (G.dir === 'L' ? -1 : 1) * LEVER_REST;
   }
 });
-Input.on('cancel', (lv) => { lv.bend.target = 0; lv.angle.target = (G.dir === 'L' ? 1 : -1) * LEVER_REST; });
+Input.on('cancel', (lv) => { lv.bend.target = 0; lv.press.target = 0; lv.angle.target = (G.dir === 'L' ? -1 : 1) * LEVER_REST; });
 function fire(d) {
   setDir(d, true);
   Sound.click(0.7);
@@ -6090,17 +6102,19 @@ function updateMechanics(dt) {
   for (const side of ['L', 'R']) { const b = S.occ[side]; if (b && !b.moving) seesawCupWorld(side, b.pos); }
   // lever
   const lv = world.lever;
-  lv.angle.step(dt); lv.bend.step(dt); lv.bounce.step(dt);
+  lv.angle.step(dt); lv.bend.step(dt); lv.bounce.step(dt); lv.press.step(dt);
   lv.axle.rotation.y = lv.angle.x;
   lv.axle.rotation.x = lv.bend.x * 0.06;                 // flex under the finger
-  lv.knobG.position.y = 0.5 + Math.max(0, lv.bounce.x) * 0.12;
-  const sq = 1 + lv.bend.x * 0.04;
-  lv.knobG.scale.set(1 + (sq - 1) * 0.5, 1 / sq, 1 + (sq - 1) * 0.5);
+  const bo = Math.max(0, lv.bounce.x), pr = Math.max(0, lv.press.x);
+  lv.knobG.position.y = 0.5 + bo * 3.4 - pr * 0.9;       // ready hop (~0.8 cm) / pressed down
+  const sq = 1 + pr * 0.12 + Math.abs(lv.bend.x) * 0.03;
+  lv.knobG.scale.set(sq, (1 / sq) * (1 + bo * 0.5), sq);
+  Hint.flash = Math.max(0, Hint.flash - dt * 3);
   if (lv.plateJig) { lv.plateJig = Math.max(0, lv.plateJig - dt * 4); lv.plate.rotation.y = Math.sin(lv.plateJig * 30) * 0.1 * lv.plateJig; }
   // knob glow when a ball is ready
   const ready = canSend();
   Hint.glow += ((ready ? 1 : 0) - Hint.glow) * Math.min(1, dt * 4);
-  MAT.knob.emissive.setRGB(0.35 * Hint.glow * (0.6 + 0.4 * Math.sin(Clock.t * 4)), 0.12 * Hint.glow, 0);
+  MAT.knob.emissive.setRGB(0.35 * Hint.glow * (0.6 + 0.4 * Math.sin(Clock.t * 4)) + 0.5 * Hint.flash, 0.12 * Hint.glow + 0.3 * Hint.flash, 0.1 * Hint.flash);
   updateCranks();
 }
 
