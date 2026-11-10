@@ -1,0 +1,2829 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#2a1d14">
+<meta name="format-detection" content="telephone=no">
+<title>やけたピザが、またのびた！</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#2a1d14;
+  touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+  -webkit-tap-highlight-color:transparent;overscroll-behavior:none;position:fixed;inset:0}
+canvas{position:fixed;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+#sa{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+</style>
+
+<script src="../../gf-playlog.js" defer></script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="sa"></div>
+<script>
+/* gf-261110-nx8 : やけたピザが、またのびた！ (fr-261029-1 / subject: free / realistic3d) */
+'use strict';
+(function(){
+const W=window, D=document;
+const clamp=(x,a,b)=>x<a?a:(x>b?b:x);
+const lerp=(a,b,t)=>a+(b-a)*t;
+const sstep=(a,b,x)=>{let t=(x-a)/(b-a);t=t<0?0:(t>1?1:t);return t*t*(3-2*t);};
+const PI=Math.PI, TAU=PI*2;
+let seed=((Date.now()&0x7fffffff)^0x2545F491)>>>0;
+function rnd(){seed=(seed+0x6D2B79F5)>>>0;let t=seed;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;}
+function nowS(){return performance.now()/1000;}
+
+/* ---------------- mat4 (column major) ---------------- */
+const T16=new Float32Array(16);
+const M4={
+  create(){const m=new Float32Array(16);m[0]=m[5]=m[10]=m[15]=1;return m;},
+  ident(m){m.fill(0);m[0]=m[5]=m[10]=m[15]=1;return m;},
+  copy(o,a){o.set(a);return o;},
+  mul(o,a,b){const r=T16;for(let i=0;i<4;i++){const b0=b[i*4],b1=b[i*4+1],b2=b[i*4+2],b3=b[i*4+3];
+      r[i*4]=a[0]*b0+a[4]*b1+a[8]*b2+a[12]*b3;r[i*4+1]=a[1]*b0+a[5]*b1+a[9]*b2+a[13]*b3;
+      r[i*4+2]=a[2]*b0+a[6]*b1+a[10]*b2+a[14]*b3;r[i*4+3]=a[3]*b0+a[7]*b1+a[11]*b2+a[15]*b3;}
+    o.set(r);return o;},
+  persp(o,fovy,asp,n,f){const t=1/Math.tan(fovy/2);o.fill(0);o[0]=t/asp;o[5]=t;o[10]=(f+n)/(n-f);o[11]=-1;o[14]=2*f*n/(n-f);return o;},
+  lookAt(o,ex,ey,ez,tx,ty,tz){let fx=ex-tx,fy=ey-ty,fz=ez-tz;let l=Math.hypot(fx,fy,fz)||1;fx/=l;fy/=l;fz/=l;
+    let rx=fz,ry=0,rz=-fx;l=Math.hypot(rx,rz)||1;rx/=l;rz/=l;
+    const ux=fy*rz-fz*ry,uy=fz*rx-fx*rz,uz=fx*ry-fy*rx;
+    o[0]=rx;o[4]=ry;o[8]=rz;o[12]=-(rx*ex+ry*ey+rz*ez);
+    o[1]=ux;o[5]=uy;o[9]=uz;o[13]=-(ux*ex+uy*ey+uz*ez);
+    o[2]=fx;o[6]=fy;o[10]=fz;o[14]=-(fx*ex+fy*ey+fz*ez);
+    o[3]=0;o[7]=0;o[11]=0;o[15]=1;return o;},
+  translate(o,x,y,z){o[12]+=o[0]*x+o[4]*y+o[8]*z;o[13]+=o[1]*x+o[5]*y+o[9]*z;o[14]+=o[2]*x+o[6]*y+o[10]*z;o[15]+=o[3]*x+o[7]*y+o[11]*z;return o;},
+  scale(o,x,y,z){for(let i=0;i<4;i++){o[i]*=x;o[4+i]*=y;o[8+i]*=z;}return o;},
+  rotX(o,a){const c=Math.cos(a),s=Math.sin(a);for(let i=0;i<4;i++){const y=o[4+i],z=o[8+i];o[4+i]=y*c+z*s;o[8+i]=z*c-y*s;}return o;},
+  rotY(o,a){const c=Math.cos(a),s=Math.sin(a);for(let i=0;i<4;i++){const x=o[i],z=o[8+i];o[i]=x*c-z*s;o[8+i]=x*s+z*c;}return o;},
+  rotZ(o,a){const c=Math.cos(a),s=Math.sin(a);for(let i=0;i<4;i++){const x=o[i],y=o[4+i];o[i]=x*c+y*s;o[4+i]=y*c-x*s;}return o;},
+  invert(o,m){const a00=m[0],a01=m[1],a02=m[2],a03=m[3],a10=m[4],a11=m[5],a12=m[6],a13=m[7],a20=m[8],a21=m[9],a22=m[10],a23=m[11],a30=m[12],a31=m[13],a32=m[14],a33=m[15];
+    const b00=a00*a11-a01*a10,b01=a00*a12-a02*a10,b02=a00*a13-a03*a10,b03=a01*a12-a02*a11,b04=a01*a13-a03*a11,b05=a02*a13-a03*a12,b06=a20*a31-a21*a30,b07=a20*a32-a22*a30,b08=a20*a33-a23*a30,b09=a21*a32-a22*a31,b10=a21*a33-a23*a31,b11=a22*a33-a23*a32;
+    let det=b00*b11-b01*b10+b02*b09+b03*b08-b04*b07+b05*b06;if(!det)return M4.ident(o);det=1/det;
+    o[0]=(a11*b11-a12*b10+a13*b09)*det;o[1]=(a02*b10-a01*b11-a03*b09)*det;o[2]=(a31*b05-a32*b04+a33*b03)*det;o[3]=(a22*b04-a21*b05-a23*b03)*det;
+    o[4]=(a12*b08-a10*b11-a13*b07)*det;o[5]=(a00*b11-a02*b08+a03*b07)*det;o[6]=(a32*b02-a30*b05-a33*b01)*det;o[7]=(a20*b05-a22*b02+a23*b01)*det;
+    o[8]=(a10*b10-a11*b08+a13*b06)*det;o[9]=(a01*b08-a00*b10-a03*b06)*det;o[10]=(a30*b04-a31*b02+a33*b00)*det;o[11]=(a21*b02-a20*b04-a23*b00)*det;
+    o[12]=(a11*b07-a10*b09-a12*b06)*det;o[13]=(a00*b09-a01*b07+a02*b06)*det;o[14]=(a31*b01-a30*b03-a32*b00)*det;o[15]=(a20*b03-a21*b01+a22*b00)*det;return o;},
+  normal3(o,m){ // inverse transpose of upper 3x3 -> o (Float32Array(9))
+    const a=m[0],b=m[1],c=m[2],d=m[4],e=m[5],f=m[6],g=m[8],h=m[9],i=m[10];
+    const A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g;let det=a*A+b*B+c*C;if(!det)det=1;const id=1/det;
+    o[0]=A*id;o[1]=B*id;o[2]=C*id;o[3]=-(b*i-c*h)*id;o[4]=(a*i-c*g)*id;o[5]=-(a*h-b*g)*id;o[6]=(b*f-c*e)*id;o[7]=-(a*f-c*d)*id;o[8]=(a*e-b*d)*id;return o;}
+};
+function xform(m,x,y,z,out){const w=m[3]*x+m[7]*y+m[11]*z+m[15];out[0]=(m[0]*x+m[4]*y+m[8]*z+m[12])/w;out[1]=(m[1]*x+m[5]*y+m[9]*z+m[13])/w;out[2]=(m[2]*x+m[6]*y+m[10]*z+m[14])/w;out[3]=w;return out;}
+
+/* ---------------- GL setup ---------------- */
+const canvas=D.getElementById('c');
+let gl=null;
+function getGL(){
+  const o={antialias:true,alpha:false,depth:true,stencil:false,premultipliedAlpha:false,preserveDrawingBuffer:false,powerPreference:'high-performance'};
+  try{return canvas.getContext('webgl',o)||canvas.getContext('experimental-webgl',o);}catch(e){return null;}
+}
+gl=getGL();
+
+const GLSL_COMMON=`
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.0-2.0*f);
+ return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),u.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),u.x),u.y);}
+float fbm(vec2 p){float s=0.0,a=0.5;for(int i=0;i<4;i++){s+=a*noise(p);p=p*2.03+vec2(1.7,9.2);a*=0.5;}return s;}
+uniform vec3 uCam;uniform vec3 uKeyDir;uniform vec3 uKeyCol;uniform vec3 uOvenCol;uniform float uGlow;uniform float uWarm;uniform vec4 uOvenBox;uniform float uTime;uniform float uOvenOff;
+vec3 envMap(vec3 r,float rough){
+ float y=r.y;
+ vec3 sky=mix(vec3(0.38,0.26,0.15),vec3(0.50,0.52,0.56),smoothstep(-0.35,0.75,y));
+ sky=mix(sky,vec3(0.62,0.58,0.52),smoothstep(0.75,1.0,y)*0.5);
+ float w=mix(0.992,0.78,rough);
+ vec3 a=normalize(vec3(-0.42,0.80,0.42));
+ float sa=smoothstep(w,w+(1.0-w)*0.55,dot(r,a));
+ vec3 b=normalize(vec3(0.80,0.42,-0.30));
+ float sb=smoothstep(w-0.004,w+(1.0-w)*0.45,dot(r,b));
+ vec3 c=normalize(vec3(0.15,0.55,0.82));
+ float sc=smoothstep(w+0.002,w+(1.0-w)*0.5,dot(r,c));
+ float k=mix(1.0,0.28,rough);
+ float win=smoothstep(0.30,0.24,abs(r.x+0.18))*smoothstep(0.42,0.60,y)*smoothstep(0.97,0.86,y);
+ return sky+(vec3(4.2,3.95,3.6)*sa+vec3(1.5,1.75,2.1)*sb+vec3(1.4,1.2,1.0)*sc*0.6)*k+vec3(0.55,0.60,0.66)*win*mix(0.45,0.2,rough);
+}
+vec3 tonemap(vec3 c){c*=0.78;c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14);return pow(clamp(c,0.0,1.0),vec3(1.0/2.2));}
+float ovenMask(vec3 w){
+ float mx=smoothstep(uOvenBox.x-0.03,uOvenBox.x+0.05,w.x)*(1.0-smoothstep(uOvenBox.y-0.05,uOvenBox.y+0.03,w.x));
+ float mz=smoothstep(uOvenBox.z-0.03,uOvenBox.z+0.05,w.z)*(1.0-smoothstep(uOvenBox.w-0.04,uOvenBox.w+0.03,w.z));
+ float my=1.0-smoothstep(0.49,0.53,w.y);
+ return mx*mz*my*(1.0-uOvenOff);
+}
+vec3 ambientAt(vec3 w,vec3 n){
+ vec3 hemi=mix(vec3(0.20,0.165,0.14),vec3(0.50,0.52,0.56),n.y*0.5+0.5);
+ float m=ovenMask(w);
+ vec3 ov=uOvenCol*(0.18+0.26*(n.y*0.5+0.5));
+ vec3 gdir=normalize(vec3(0.0,0.35,-1.0));
+ float back=clamp((w.z-uOvenBox.z),0.0,1.2);
+ vec3 glow=vec3(1.0,0.42,0.12)*uGlow*(0.30+0.7*max(dot(n,-gdir),0.0)+0.25*max(-n.y,0.0))/(1.0+back*2.2);
+ vec2 sd=vec2(w.x*0.8,w.z-0.62);
+ vec3 spill=vec3(1.0,0.60,0.28)*uWarm*0.42*(0.35+0.65*max(n.y,0.0))/(1.0+dot(sd,sd)*7.0);
+ return mix(hemi+spill,ov+glow,m);
+}
+float keyAtt(vec3 w){return mix(1.0,0.92,ovenMask(w));}
+vec3 shadeStd2(vec3 base,vec3 n,vec3 v,vec3 w,float rough,float metal,float coat,float ao,float wrap,float sh){
+ vec3 l=uKeyDir;vec3 h=normalize(l+v);
+ float ndlr=dot(n,l);float ndl=max((ndlr+wrap)/(1.0+wrap),0.0);float ndv=max(dot(n,v),0.001);float ndh=max(dot(n,h),0.0);float vdh=max(dot(v,h),0.0);
+ vec3 f0=mix(vec3(0.04),base,metal);
+ vec3 F=f0+(1.0-f0)*pow(1.0-vdh,5.0);
+ float a=max(rough*rough,0.002);float a2=a*a;float d=ndh*ndh*(a2-1.0)+1.0;float Dg=a2/(3.14159*d*d);
+ float k=(rough+1.0)*(rough+1.0)/8.0;float nl=max(ndlr,0.0);float G=(ndv/(ndv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
+ vec3 spec=Dg*G*F/(4.0*ndv*max(nl,0.001)+0.0001);
+ vec3 kd=(1.0-F)*(1.0-metal);
+ vec3 kc=uKeyCol*keyAtt(w)*sh;
+ vec3 col=(kd*base/3.14159*ndl+spec*nl)*kc;
+ col+=kd*base*ambientAt(w,n)*ao;
+ vec3 r=reflect(-v,n);
+ vec3 Fe=f0+(max(vec3(1.0-rough),f0)-f0)*pow(1.0-ndv,5.0);
+ vec3 envc=envMap(r,rough);
+ float om=ovenMask(w);
+ envc=mix(envc,envc*0.22+uOvenCol*0.32+vec3(1.0,0.45,0.15)*uGlow*0.6,om);
+ col+=envc*Fe*ao*mix(0.62,1.05,metal);
+ if(coat>0.0){
+  float fc=0.04+0.96*pow(1.0-ndv,5.0);
+  vec3 ec=envMap(r,0.06);ec=mix(ec,ec*0.4+uOvenCol*0.5+vec3(1.0,0.45,0.15)*uGlow*0.7,om);
+  col=col*(1.0-coat*fc)+coat*fc*ec*ao;
+  float ac=0.012;float dc=ndh*ndh*(ac-1.0)+1.0;col+=coat*0.05*(ac/(3.14159*dc*dc))*nl*kc*0.25;
+ }
+ return col;
+}
+vec3 shadeStd(vec3 base,vec3 n,vec3 v,vec3 w,float rough,float metal,float coat,float ao,float wrap){return shadeStd2(base,n,v,w,rough,metal,coat,ao,wrap,1.0);}
+`;
+
+const VS_STD=`
+attribute vec3 aP;attribute vec3 aN;attribute vec2 aT;
+uniform mat4 uVP;uniform mat4 uM;uniform mat3 uNM;
+varying vec3 vW;varying vec3 vN;varying vec2 vT;varying vec3 vL;
+void main(){vec4 w=uM*vec4(aP,1.0);vW=w.xyz;vN=normalize(uNM*aN);vT=aT;vL=aP;gl_Position=uVP*w;}`;
+
+const FS_STD=`precision highp float;
+varying vec3 vW;varying vec3 vN;varying vec2 vT;varying vec3 vL;
+uniform vec3 uCol;uniform float uRough;uniform float uMetal;uniform float uCoat;uniform float uKind;uniform float uAlpha;uniform vec3 uEmit;uniform float uAO;uniform vec4 uParam;
+${GLSL_COMMON}
+void main(){
+ vec3 n=normalize(vN);
+ vec3 v=normalize(uCam-vW);
+ vec3 base=uCol;float rough=uRough;float metal=uMetal;float coat=uCoat;float ao=1.0;float wrap=0.0;vec3 emit=uEmit;
+ float kind=uKind;
+ if(kind>0.5&&kind<1.5){ /* wood table */
+  vec2 q=vW.xz;
+  float plank=floor((q.y+0.13)/0.42);
+  float o=hash(vec2(plank,3.1))*7.0;
+  float g=fbm(vec2(q.x*1.6+o,q.y*12.0+o));
+  float rings=sin(q.y*58.0+g*9.0+o*3.0)*0.5+0.5;
+  float fine=noise(vec2(q.x*40.0,q.y*260.0));
+  base=mix(vec3(0.36,0.215,0.115),vec3(0.60,0.40,0.23),clamp(rings*0.45+g*0.55,0.0,1.0));
+  base*=0.86+0.14*fine;base*=0.92+0.16*hash(vec2(plank,9.7));
+  float gap=fract((q.y+0.13)/0.42);gap=smoothstep(0.0,0.012,gap)*smoothstep(1.0,0.988,gap);
+  base*=mix(0.35,1.0,gap);rough=mix(0.62,0.42,fine);
+  ao=gap;
+ } else if(kind>1.5&&kind<2.5){ /* black enamel */
+  float op=noise(vW.xz*140.0+vW.y*90.0);
+  rough=uRough+op*0.05;
+ } else if(kind>2.5&&kind<3.5){ /* copper brushed (dial / feet) */
+  float ang=atan(vL.x,vL.z);float rr=length(vL.xz);
+  float br=noise(vec2(rr*900.0,ang*2.0));
+  base=uCol*(0.90+0.16*br);rough=uRough*0.8+0.10*br;
+  float pat=smoothstep(0.55,0.9,noise(vL.xz*60.0+vL.y*30.0));base=mix(base,vec3(0.55,0.42,0.30),pat*0.12);
+ } else if(kind>3.5&&kind<4.5){ /* ceramic plate */
+  float rr=length(vL.xz)/max(uParam.x,0.001);
+  float band=smoothstep(0.885,0.895,rr)*(1.0-smoothstep(0.915,0.925,rr));
+  base=mix(uCol,vec3(0.55,0.36,0.20),band*0.85);
+  float sp=noise(vL.xz*90.0);base*=0.97+0.03*sp;
+ } else if(kind>4.5&&kind<5.5){ /* fur */
+  float f1=noise(vec2(vL.x*90.0+vL.z*40.0,vL.y*260.0));
+  float f2=noise(vL.xy*35.0+vL.z*20.0);
+  base=uCol*(0.80+0.26*f1)*(0.92+0.12*f2);
+  n=normalize(n+vec3(f1-0.5,f2-0.5,f1-f2)*0.38);
+  wrap=0.45;rough=0.82;
+  float rim=pow(1.0-max(dot(n,v),0.0),3.0);emit+=uCol*rim*0.35*(0.6+0.4*f1);
+ } else if(kind>5.5&&kind<6.5){ /* skin */
+  wrap=0.55;rough=0.55;
+  float rim=pow(1.0-max(dot(n,v),0.0),2.5);emit+=vec3(0.9,0.35,0.25)*rim*0.18;
+ } else if(kind>6.5&&kind<7.5){ /* tray steel */
+  float st=fbm(vW.xz*7.0);float fl=smoothstep(0.88,0.98,noise(vW.xz*150.0))*0.5;
+  float bru=noise(vec2(vW.x*5.0,vW.z*420.0));
+  base=mix(uCol,uCol*vec3(0.62,0.52,0.42),smoothstep(0.45,0.8,st)*0.7);
+  base*=0.88+0.2*bru;
+  base=mix(base,vec3(0.70,0.66,0.60),fl*0.10);rough=uRough+st*0.12+bru*0.08+fl*0.15;
+ } else if(kind>7.5&&kind<8.5){ /* heating coil */
+  float t=uParam.y;
+  emit+=vec3(1.0,0.36,0.08)*uGlow*2.4*(0.75+0.25*sin(vL.x*40.0+uTime*2.0));
+  base=mix(uCol,vec3(0.4,0.15,0.05),uGlow*0.5);
+ } else if(kind>8.5&&kind<9.5){ /* interior enamel */
+  float sp=noise(vW.xz*60.0+vW.y*40.0);rough=uRough+sp*0.1;
+ } else if(kind>9.5&&kind<10.5){ /* cheese strand */
+  base=mix(vec3(0.97,0.86,0.58),vec3(0.95,0.72,0.34),0.5+0.5*noise(vL.xy*30.0));wrap=0.6;
+  float tr=1.0-max(dot(n,v),0.0);emit+=base*vec3(1.0,0.78,0.45)*(0.10+0.30*tr*tr);
+ }
+ vec3 col=shadeStd(base,n,v,vW,rough,metal,coat,ao*uAO,wrap)+emit;
+ gl_FragColor=vec4(tonemap(col),uAlpha);
+}`;
+
+/* dough heightfield */
+const VS_DOUGH=`
+attribute vec2 aXZ;attribute vec3 aY;attribute vec4 aA;attribute vec4 aB;attribute vec4 aC;attribute vec4 aD;
+uniform mat4 uVP;
+varying vec3 vW;varying vec3 vN;varying vec4 vA;varying vec4 vB;varying vec4 vC;varying vec4 vD;
+void main(){vec3 p=vec3(aXZ.x,aY.x,aXZ.y);vD=aD;vW=p;float ny=sqrt(max(1.0-aY.y*aY.y-aY.z*aY.z,0.02));vN=vec3(aY.y,ny,aY.z);
+vA=aA;vB=aB;vC=aC;gl_Position=uVP*vec4(p,1.0);}`;
+
+const FS_DOUGH=`precision highp float;
+varying vec3 vW;varying vec3 vN;varying vec4 vA;varying vec4 vB;varying vec4 vC;varying vec4 vD;
+${GLSL_COMMON}
+uniform float uPlate;
+void main(){
+ float vis=vB.x;if(vis<0.40)discard;
+ float alpha=smoothstep(0.43,0.58,vis);
+ vec2 p=vW.xz;
+ float bake=vA.x,crisp=vA.y,toast=vA.z,ch=vA.w;
+ float air=vB.y,glw=vB.z,ao=0.55+0.45*vB.w;
+ float flap=vC.x,crack=vC.y,puff=vC.z,seam=vC.w;
+ float e=0.004;
+ float n0=noise(p*95.0);
+ float nx=noise(p*95.0+vec2(e*95.0,0.0));float nz=noise(p*95.0+vec2(0.0,e*95.0));
+ float b0=noise(p*58.0+3.1);
+ float bubR=smoothstep(0.62,0.74,b0)*(1.0-smoothstep(0.78,0.88,b0));float bubC=smoothstep(0.82,0.94,b0);
+ float bx=noise(p*58.0+3.1+vec2(e*58.0,0.0));float bz=noise(p*58.0+3.1+vec2(0.0,e*58.0));
+ float chN=noise(p*16.0+2.7);float chM=smoothstep(0.10,0.42,ch+(chN-0.5)*0.22);
+ float bumpS=mix(0.26,0.18,bake)*(1.0-chM*0.5);
+ vec3 n=normalize(vN+vec3(-(nx-n0),0.0,-(nz-n0))*bumpS*1.6+vec3(-(bx-b0),0.0,-(bz-b0))*bumpS*1.2*(1.0-bake*0.4));
+ vec3 v=normalize(uCam-vW);
+ float nb2=noise(p*230.0);
+ vec3 rawC=vec3(0.86,0.71,0.48)*(0.93+0.10*n0);
+ float fp=noise(p*31.0+11.0);
+ float flour=(smoothstep(0.45,0.85,fp)*0.22+smoothstep(0.50,0.80,fp)*smoothstep(0.60,0.85,nb2)*0.6)*(1.0-bake);
+ rawC=mix(rawC,vec3(0.97,0.96,0.93),flour);
+ rawC=mix(rawC,rawC*1.06+0.015,bubC*0.7);
+ vec3 gold=vec3(0.80,0.45,0.13),brown=vec3(0.52,0.22,0.05),dark=vec3(0.17,0.065,0.018);
+ float rim=1.0-smoothstep(0.55,0.97,vis);
+ float hi=clamp(0.20+0.60*crisp+0.42*puff*smoothstep(0.30,0.85,n0)+0.5*rim+0.25*bubC,0.0,1.0);
+ vec3 bakedC=mix(gold,brown,hi);
+ float spots=smoothstep(0.72,0.82,noise(p*24.0+5.0)*0.62+n0*0.38)*puff;
+ bakedC=mix(bakedC,dark,spots*0.7);
+ bakedC=mix(bakedC,dark*1.1,crisp*smoothstep(0.58,0.80,nb2)*0.55);
+ bakedC=mix(bakedC,vec3(0.95,0.66,0.30),crisp*smoothstep(0.2,0.0,nb2)*0.25);
+ float bk=smoothstep(0.0,1.0,bake);
+ vec3 dough=mix(rawC,bakedC,bk);
+ dough=mix(dough,vec3(0.22,0.085,0.022),clamp(toast*0.95,0.0,0.9));
+ dough*=1.0-0.18*smoothstep(0.25,0.6,toast)*(1.0-smoothstep(0.6,0.95,toast));
+ dough*=1.0-bubR*0.15*(1.0-bake*0.4);
+ dough=mix(dough,dough*vec3(1.05,0.98,0.9),flap*0.15);
+ vec3 chC=mix(vec3(0.95,0.82,0.48),vec3(0.95,0.68,0.27),bake*0.75);
+ vec2 pr=vec2(p.x*0.8-p.y*0.6,p.x*0.6+p.y*0.8);vec2 pr2=vec2(pr.x*0.5-pr.y*0.87,pr.x*0.87+pr.y*0.5);
+ float bn=noise(pr*21.0+7.0)*0.65+noise(pr2*47.0+1.0)*0.35;
+ float chBl=smoothstep(0.62,0.80,bn)*bake*smoothstep(0.35,0.9,ch);
+ chC=mix(chC,vec3(0.76,0.36,0.07),chBl*0.6);
+ chC=mix(chC,vec3(0.45,0.17,0.035),smoothstep(0.78,0.9,bn)*bake*0.5);
+ chC=mix(vec3(0.95,0.62,0.18),chC,smoothstep(0.15,0.75,chM));
+ chC=mix(chC,vec3(0.36,0.14,0.03),clamp(toast*0.75,0.0,0.75));
+ float cb=noise(pr2*26.0+1.3);n=normalize(n+vec3(noise(pr2*26.0+vec2(0.6,1.3))-cb,0.0,noise(pr2*26.0+vec2(1.3,0.6))-cb)*chM*1.4);
+ vec3 base=mix(dough,chC,chM);
+ float rough=mix(mix(0.68,0.55,bk),0.2,chM);
+ rough=mix(rough,0.38,crisp*0.5);rough=mix(rough,0.95,flour);
+ float wrap=mix(0.42,0.2,bk);
+ float shd=0.25+0.75*vD.x;
+ vec3 col=shadeStd2(base,n,v,vW,rough,0.0,0.0,ao*(0.75+0.25*vD.x),wrap,shd);
+ float thinGlow=(1.0-bk)*0.12;
+ col+=base*vec3(1.0,0.75,0.45)*thinGlow;
+ col*=1.0-crack*0.85;
+ col*=1.0-seam*0.25;
+ {vec3 hh=normalize(uKeyDir+v);float nh=max(dot(n,hh),0.0);float sp=pow(nh,90.0)*0.55+pow(nh,20.0)*0.07;col+=uKeyCol*sp*chM*shd*keyAtt(vW);}
+ col+=base*base*uKeyCol*0.07*chM*(0.4+0.6*shd);
+ col+=vec3(1.0,0.78,0.42)*glw*0.32;
+ col+=vec3(1.0,0.95,0.85)*air*0.06*smoothstep(0.6,1.0,n.y);
+ gl_FragColor=vec4(tonemap(col),alpha);
+}`;
+
+/* dough contact shadow (flattened, offset) */
+const VS_DSH=`
+attribute vec2 aXZ;attribute vec3 aY;attribute vec4 aB;
+uniform mat4 uVP;uniform vec2 uOff;uniform float uBaseY;
+varying float vV;varying float vH;
+void main(){float h=aY.x;vV=aB.x;vH=h;vec3 p=vec3(aXZ.x,uBaseY,aXZ.y);
+gl_Position=uVP*vec4(p,1.0);}`;
+const FS_DSH=`precision mediump float;varying float vV;varying float vH;uniform float uStr;
+void main(){float a=smoothstep(0.08,0.55,vV)*uStr;gl_FragColor=vec4(0.0,0.0,0.0,a);}`;
+
+/* glass */
+const FS_GLASS=`precision highp float;
+varying vec3 vW;varying vec3 vN;varying vec2 vT;varying vec3 vL;
+uniform float uAlpha;uniform vec4 uParam;
+${GLSL_COMMON}
+void main(){
+ vec3 n=normalize(vN);vec3 v=normalize(uCam-vW);if(dot(n,v)<0.0)n=-n;
+ float ndv=max(dot(n,v),0.0);
+ float F=0.04+0.96*pow(1.0-ndv,5.0);
+ float smudge=noise(vT*vec2(7.0,5.0)+3.0)*0.62+noise(vT*vec2(23.0,17.0)+1.0)*0.38;
+ float streak=smoothstep(0.35,0.0,abs(fract(vT.x*1.3-vT.y*0.9+0.2)-0.5))*0.5;
+ vec3 r=reflect(-v,n);
+ vec3 refl=envMap(r,0.03+smudge*0.12);
+ vec3 tint=mix(vec3(0.52,0.60,0.68),vec3(1.0,0.76,0.48),uWarm);
+ float edge=max(smoothstep(0.035,0.0,vT.x),max(smoothstep(0.965,1.0,vT.x),max(smoothstep(0.035,0.0,vT.y),smoothstep(0.965,1.0,vT.y))));
+ float d=fract(vT.x*0.62-vT.y*0.42+0.12);
+ float wb=(smoothstep(0.0,0.012,d)*smoothstep(0.13,0.115,d)+smoothstep(0.165,0.175,d)*smoothstep(0.205,0.195,d)*0.6)*(0.6+0.4*smudge);
+ float fr=clamp(F*(1.0+streak*1.6)+smudge*0.03,0.0,0.6);
+ float ab=fr+0.02+edge*0.35;float a=clamp(ab+wb*0.07,0.0,0.8)*uAlpha;
+ vec3 c=mix(tonemap(tint*0.42),tonemap(refl*0.85),clamp(fr*9.0,0.0,1.0));
+ c=mix(c,tonemap(vec3(1.25,1.27,1.3)*mix(vec3(1.0),vec3(1.1,0.85,0.6),uWarm)),clamp(wb*0.07/max(ab+wb*0.07,0.001),0.0,1.0));
+ c=mix(c,vec3(0.64,0.76,0.72),edge*0.5);
+ gl_FragColor=vec4(c,a);
+}`;
+
+/* fx particles */
+const VS_PT=`attribute vec3 aP;attribute vec4 aC;attribute float aS;uniform mat4 uVP;uniform float uScale;varying vec4 vC;
+void main(){vec4 p=uVP*vec4(aP,1.0);gl_Position=p;gl_PointSize=clamp(aS*uScale/p.w,1.0,180.0);vC=aC;}`;
+const FS_PT=`precision mediump float;varying vec4 vC;
+void main(){vec2 d=gl_PointCoord-0.5;float r=length(d);float a=(1.0-smoothstep(0.15,0.5,r))*vC.a;if(a<0.01)discard;gl_FragColor=vec4(vC.rgb*a,a);}`;
+
+/* soft blob shadows on table/plate */
+const VS_BLOB=`attribute vec3 aP;attribute vec3 aN;attribute vec2 aT;uniform mat4 uVP;uniform mat4 uM;varying vec2 vT;
+void main(){vT=aT*2.0-1.0;gl_Position=uVP*(uM*vec4(aP,1.0));}`;
+const FS_BLOB=`precision mediump float;varying vec2 vT;uniform float uStr;uniform float uSoft;uniform float uRect;uniform vec3 uBC;
+void main(){float d;
+ if(uRect>0.5){vec2 q=abs(vT)-vec2(1.0-uSoft);d=length(max(q,0.0))/uSoft;}else{d=length(vT);d=(d-(1.0-uSoft))/uSoft;}
+ float a=(1.0-smoothstep(0.0,1.0,d))*uStr;gl_FragColor=vec4(uBC,a);}`;
+
+/* blit */
+const VS_BLIT=`attribute vec2 aP;varying vec2 vU;void main(){vU=aP*0.5+0.5;gl_Position=vec4(aP,0.0,1.0);}`;
+const FS_BLIT=`precision mediump float;varying vec2 vU;uniform sampler2D uTex;void main(){gl_FragColor=texture2D(uTex,vU);}`;
+
+/* depth-only */
+const FS_DEPTH=`precision mediump float;void main(){gl_FragColor=vec4(0.0);}`;
+
+let PR={}; // programs
+function compileShader(type,src){
+  const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)&&!gl.isContextLost()){W.__shaderLog=(W.__shaderLog||'')+gl.getShaderInfoLog(s);}
+  return s;
+}
+function makeProgram(vs,fs,attrs){
+  const p=gl.createProgram();
+  gl.attachShader(p,compileShader(gl.VERTEX_SHADER,vs));gl.attachShader(p,compileShader(gl.FRAGMENT_SHADER,fs));
+  attrs.forEach((a,i)=>gl.bindAttribLocation(p,i,a));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)&&!gl.isContextLost()){W.__shaderLog=(W.__shaderLog||'')+gl.getProgramInfoLog(p);}
+  const u={};const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS)||0;
+  for(let i=0;i<n;i++){const inf=gl.getActiveUniform(p,i);if(!inf)continue;u[inf.name.replace(/\[0\]$/,'')]=gl.getUniformLocation(p,inf.name);}
+  return {p,u,n:attrs.length};
+}
+function initPrograms(){
+  PR.std=makeProgram(VS_STD,FS_STD,['aP','aN','aT']);
+  PR.glass=makeProgram(VS_STD,FS_GLASS,['aP','aN','aT']);
+  PR.dough=makeProgram(VS_DOUGH,FS_DOUGH,['aXZ','aY','aA','aB','aC','aD']);
+  PR.dsh=makeProgram(VS_DSH,FS_DSH,['aXZ','aY','aB']);
+  PR.pt=makeProgram(VS_PT,FS_PT,['aP','aC','aS']);
+  PR.blob=makeProgram(VS_BLOB,FS_BLOB,['aP','aN','aT']);
+  PR.blit=makeProgram(VS_BLIT,FS_BLIT,['aP']);
+  PR.depth=makeProgram(VS_STD,FS_DEPTH,['aP','aN','aT']);
+}
+
+/* ---------------- geometry builders ---------------- */
+function Geo(){return {p:[],n:[],t:[],i:[]};}
+function gGrid(g,nu,nv,fn){ // fn(u,v,out[8]) u,v in [0,1]
+  const base=g.p.length/3;const o=new Array(8);
+  for(let j=0;j<=nv;j++)for(let i=0;i<=nu;i++){fn(i/nu,j/nv,o);g.p.push(o[0],o[1],o[2]);g.n.push(o[3],o[4],o[5]);g.t.push(o[6],o[7]);}
+  for(let j=0;j<nv;j++)for(let i=0;i<nu;i++){const a=base+j*(nu+1)+i,b=a+1,c=a+nu+1,d=c+1;g.i.push(a,c,b,b,c,d);}
+  return g;
+}
+function gSphere(g,rx,ry,rz,nu,nv,cx,cy,cz){
+  cx=cx||0;cy=cy||0;cz=cz||0;
+  return gGrid(g,nu||24,nv||16,(u,v,o)=>{const th=u*TAU,ph=v*PI;const sx=Math.sin(ph)*Math.sin(th),sy=Math.cos(ph),sz=Math.sin(ph)*Math.cos(th);
+    o[0]=cx+sx*rx;o[1]=cy+sy*ry;o[2]=cz+sz*rz;let nx=sx/rx,ny=sy/ry,nz=sz/rz;const l=Math.hypot(nx,ny,nz)||1;o[3]=nx/l;o[4]=ny/l;o[5]=nz/l;o[6]=u;o[7]=v;});
+}
+function gLathe(g,prof,nu){ // prof: [[r,y],...] from inside/bottom upwards, normals computed from tangent
+  const n=prof.length;const base=g.p.length/3;
+  for(let j=0;j<n;j++){const p0=prof[Math.max(0,j-1)],p1=prof[Math.min(n-1,j+1)];let tr=p1[0]-p0[0],ty=p1[1]-p0[1];const l=Math.hypot(tr,ty)||1;tr/=l;ty/=l;
+    const nr=ty,ny=-tr; // outward normal for profile going up and outward
+    for(let i=0;i<=nu;i++){const th=i/nu*TAU;const c=Math.cos(th),s=Math.sin(th);const r=prof[j][0];
+      g.p.push(r*s,prof[j][1],r*c);g.n.push(nr*s,ny,nr*c);g.t.push(i/nu,j/(n-1));}}
+  for(let j=0;j<n-1;j++)for(let i=0;i<nu;i++){const a=base+j*(nu+1)+i,b=a+1,c=a+nu+1,d=c+1;g.i.push(a,b,c,b,d,c);}
+  return g;
+}
+function gRBox(g,cx,cy,cz,hx,hy,hz,r,seg){ // rounded box
+  seg=seg||4;r=Math.min(r,hx,hy,hz);
+  const samp=(h)=>{const a=[-h];for(let k=1;k<=seg;k++){a.push(-h+r*(1-Math.cos(k/seg*PI/2)));}if(h-r>-h+r+1e-6){a.push(h-r);}
+    for(let k=seg-1;k>=0;k--){a.push(h-r*(1-Math.cos(k/seg*PI/2)));}
+    const out=[];for(const v of a){if(!out.length||Math.abs(v-out[out.length-1])>1e-7)out.push(v);}return out;};
+  const sx=samp(hx),sy=samp(hy),sz=samp(hz);
+  const ih=[hx-r,hy-r,hz-r];
+  const face=(axis,sign,A,B,ai,bi)=>{const base=g.p.length/3;
+    for(let j=0;j<B.length;j++)for(let i=0;i<A.length;i++){const p=[0,0,0];p[axis]=sign*[hx,hy,hz][axis];p[ai]=A[i];p[bi]=B[j];
+      const q=[clamp(p[0],-ih[0],ih[0]),clamp(p[1],-ih[1],ih[1]),clamp(p[2],-ih[2],ih[2])];
+      let dx=p[0]-q[0],dy=p[1]-q[1],dz=p[2]-q[2];const l=Math.hypot(dx,dy,dz)||1;dx/=l;dy/=l;dz/=l;
+      g.p.push(cx+q[0]+dx*r,cy+q[1]+dy*r,cz+q[2]+dz*r);g.n.push(dx,dy,dz);g.t.push(i/(A.length-1),j/(B.length-1));}
+    for(let j=0;j<B.length-1;j++)for(let i=0;i<A.length-1;i++){const a=base+j*A.length+i,b=a+1,c=a+A.length,d=c+1;
+      if(sign>0)g.i.push(a,b,c,b,d,c);else g.i.push(a,c,b,b,c,d);}};
+  face(0,1,sy,sz,1,2);face(0,-1,sy,sz,1,2);
+  face(1,1,sz,sx,2,0);face(1,-1,sz,sx,2,0);
+  face(2,1,sx,sy,0,1);face(2,-1,sx,sy,0,1);
+  return g;
+}
+function gTube(g,pts,rad,nseg){ // pts: [[x,y,z],...], rad: number or fn(t)
+  nseg=nseg||8;const n=pts.length;const base=g.p.length/3;
+  for(let j=0;j<n;j++){const a=pts[Math.max(0,j-1)],b=pts[Math.min(n-1,j+1)];let tx=b[0]-a[0],ty=b[1]-a[1],tz=b[2]-a[2];let l=Math.hypot(tx,ty,tz)||1;tx/=l;ty/=l;tz/=l;
+    let ux=0,uy=1,uz=0;if(Math.abs(ty)>0.9){ux=1;uy=0;}
+    let bx=ty*uz-tz*uy,by=tz*ux-tx*uz,bz=tx*uy-ty*ux;l=Math.hypot(bx,by,bz)||1;bx/=l;by/=l;bz/=l;
+    const cx2=by*tz-bz*ty,cy2=bz*tx-bx*tz,cz2=bx*ty-by*tx;
+    const r=typeof rad==='function'?rad(j/(n-1)):rad;
+    for(let i=0;i<=nseg;i++){const th=i/nseg*TAU;const c=Math.cos(th),s=Math.sin(th);const nx=bx*c+cx2*s,ny=by*c+cy2*s,nz=bz*c+cz2*s;
+      g.p.push(pts[j][0]+nx*r,pts[j][1]+ny*r,pts[j][2]+nz*r);g.n.push(nx,ny,nz);g.t.push(i/nseg,j/(n-1));}}
+  for(let j=0;j<n-1;j++)for(let i=0;i<nseg;i++){const a=base+j*(nseg+1)+i,b=a+1,c=a+nseg+1,d=c+1;g.i.push(a,c,b,b,c,d);}
+  return g;
+}
+function gQuad(g,p0,du,dv,nrm){ // parallelogram p0 + u*du + v*dv
+  const base=g.p.length/3;
+  for(let j=0;j<2;j++)for(let i=0;i<2;i++){g.p.push(p0[0]+du[0]*i+dv[0]*j,p0[1]+du[1]*i+dv[1]*j,p0[2]+du[2]*i+dv[2]*j);g.n.push(nrm[0],nrm[1],nrm[2]);g.t.push(i,j);}
+  g.i.push(base,base+2,base+1,base+1,base+2,base+3);return g;
+}
+function meshFromGeo(g){
+  const nv=g.p.length/3;const data=new Float32Array(nv*8);
+  for(let k=0;k<nv;k++){data[k*8]=g.p[k*3];data[k*8+1]=g.p[k*3+1];data[k*8+2]=g.p[k*3+2];data[k*8+3]=g.n[k*3];data[k*8+4]=g.n[k*3+1];data[k*8+5]=g.n[k*3+2];data[k*8+6]=g.t[k*2];data[k*8+7]=g.t[k*2+1];}
+  const m={geo:g,count:g.i.length,vbo:null,ibo:null};uploadMesh(m,data);return m;
+}
+function uploadMesh(m,data){
+  const g=m.geo;data=data||(()=>{const nv=g.p.length/3;const d=new Float32Array(nv*8);for(let k=0;k<nv;k++){d.set([g.p[k*3],g.p[k*3+1],g.p[k*3+2],g.n[k*3],g.n[k*3+1],g.n[k*3+2],g.t[k*2],g.t[k*2+1]],k*8);}return d;})();
+  m.vbo=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,m.vbo);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);
+  m.ibo=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,m.ibo);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(g.i),gl.STATIC_DRAW);
+  m.count=g.i.length;
+}
+
+/* ---------------- world layout ---------------- */
+const WL={
+  trayY:0.22,floorY:0.155,lipY:0.158,
+  tray:{x0:-0.60,x1:0.60,z0:-0.58,z1:0.32},
+  inner:{x0:-0.70,x1:0.70,z0:-0.68,z1:0.43},
+  outerX:0.79,backZ:-0.77,frontZ:0.50,
+  wallTop:0.505,doorZ:0.462,doorBot:0.245,doorTop:0.50,
+  grid:{x0:-0.88,z0:-0.74,x1:0.92,z1:2.2,cell:0.016}
+};
+const LAY={portrait:true,plate:{x:0.16,z:1.10,r:0.46},dog:{x:-0.56,z:1.20,yaw:0.95},elev:1.02,mouth:[0,0,0],dogZone:{x:-0.4,z:1.2,r:0.18}};
+function computeLayout(asp,aspS){
+  const old={x:LAY.plate.x,z:LAY.plate.z,r:LAY.plate.r};
+  aspS=aspS||asp;
+  if(asp<1.0){
+    LAY.portrait=true;
+    const tall=clamp((0.75-asp)/0.3,0,1); // 1 for very tall phones
+    const t2=clamp((0.60-aspS)/0.1,0,1);   // very tall safe area: dog below the plate
+    LAY.plate={x:lerp(0.13,0.10,t2),z:lerp(1.08+0.04*tall,1.12,t2),r:lerp(0.45,0.47,t2)};
+    LAY.dog={x:lerp(-0.44,-0.22,t2),z:lerp(1.50+0.10*tall,1.95,t2),yaw:lerp(0.45,0.35,t2)};
+    LAY.elev=lerp(1.1+0.06*tall,1.25,t2);
+  }else{
+    LAY.portrait=false;
+    LAY.plate={x:-0.06,z:0.94,r:0.42};
+    LAY.dog={x:0.92,z:0.92,yaw:-0.40};
+    LAY.elev=0.85;
+  }
+  return {dx:LAY.plate.x-old.x,dz:LAY.plate.z-old.z,sr:LAY.plate.r/old.r};
+}
+
+/* support surface height under the dough */
+function plateSurf(x,z){
+  const P=LAY.plate;const r=Math.hypot(x-P.x,z-P.z)/P.r;
+  return 0.021+0.026*sstep(0.74,1.0,r);
+}
+function supportY(x,z){
+  const P=LAY.plate;const pr=Math.hypot(x-P.x,z-P.z);
+  if(pr<P.r*0.995&&z>0.52)return plateSurf(x,z);
+  if(z<0.43){
+    const T=WL.tray;
+    const dx=Math.max(T.x0-x,x-T.x1,0),dz=Math.max(T.z0-z,z-T.z1,0);
+    const d=Math.max(dx,dz);
+    return WL.trayY-0.068*sstep(0,0.075,d);
+  }
+  // corridor from oven lip to plate
+  const near=P.z-P.r;
+  const t=sstep(0.50,Math.max(0.56,near+0.07),z);
+  const lip=WL.lipY;
+  const ty=pr<P.r*1.25?plateSurf(x,Math.min(z,P.z)):0.006;
+  return lerp(lip,ty,t);
+}
+
+/* ---------------- camera ---------------- */
+const CAM={eye:[0,2,3],tgt:[0,0.2,0.4],fov:0.54,dist:3.4,V:M4.create(),P:M4.create(),VP:M4.create(),iVP:M4.create(),
+  w:1,h:1,cssW:1,cssH:1,dpr:1,scale:1,right:[1,0,0],up:[0,1,0]};
+const SAFE={t:0,r:0,b:0,l:0};
+function readSafe(){
+  try{const e=D.getElementById('sa');const cs=getComputedStyle(e);
+    SAFE.t=parseFloat(cs.paddingTop)||0;SAFE.r=parseFloat(cs.paddingRight)||0;SAFE.b=parseFloat(cs.paddingBottom)||0;SAFE.l=parseFloat(cs.paddingLeft)||0;}catch(e){}
+}
+function camCompute(){
+  const el=LAY.elev;const ex=CAM.tgt[0],ey=CAM.tgt[1]+CAM.dist*Math.sin(el),ez=CAM.tgt[2]+CAM.dist*Math.cos(el);
+  CAM.eye[0]=ex;CAM.eye[1]=ey;CAM.eye[2]=ez;
+  M4.lookAt(CAM.V,ex,ey,ez,CAM.tgt[0],CAM.tgt[1],CAM.tgt[2]);
+  M4.persp(CAM.P,CAM.fov,CAM.cssW/CAM.cssH,0.1,30);
+  M4.mul(CAM.VP,CAM.P,CAM.V);M4.invert(CAM.iVP,CAM.VP);
+  CAM.right[0]=CAM.V[0];CAM.right[1]=CAM.V[4];CAM.right[2]=CAM.V[8];
+  CAM.up[0]=CAM.V[1];CAM.up[1]=CAM.V[5];CAM.up[2]=CAM.V[9];
+}
+function fitPoints(){
+  const pts=[];const I=WL.inner;
+  const xw=LAY.portrait?0.665:0.80;
+  for(const x of [-xw,xw]){pts.push([x,0.5,I.z0],[x,0.5,0.46],[x,0.03,0.5]);}
+  pts.push([0.58,0.09,0.53]);if(LAY.portrait)pts.push([0.70,0.22,-0.13]);
+  const P=LAY.plate;for(let k=0;k<12;k++){const a=k/12*TAU;pts.push([P.x+Math.cos(a)*P.r*1.03,0.02,P.z+Math.sin(a)*P.r*1.03]);}
+  const d=LAY.dog;const c=Math.cos(d.yaw),s=Math.sin(d.yaw);
+  for(const lx of [-0.17,0.17])for(const lz of [-0.24,0.27])for(const ly of [0.0,0.54]){pts.push([d.x+lx*c+lz*s,ly,d.z-lx*s+lz*c]);}
+  return pts;
+}
+function fitCamera(){
+  const pts=fitPoints();
+  const mx=0.035,my=0.03;
+  const ax0=-1+2*(SAFE.l/CAM.cssW)+mx*2,ax1=1-2*(SAFE.r/CAM.cssW)-mx*2;
+  const ay0=-1+2*(SAFE.b/CAM.cssH)+my*2,ay1=1-2*(SAFE.t/CAM.cssH)-my*2;
+  CAM.tgt[0]=0;CAM.tgt[1]=0.15;CAM.tgt[2]=0.35;CAM.dist=3.6;
+  const o=[0,0,0,0];
+  for(let it=0;it<14;it++){
+    camCompute();
+    let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+    for(const p of pts){xform(CAM.VP,p[0],p[1],p[2],o);x0=Math.min(x0,o[0]);x1=Math.max(x1,o[0]);y0=Math.min(y0,o[1]);y1=Math.max(y1,o[1]);}
+    const k=Math.max((x1-x0)/(ax1-ax0),(y1-y0)/(ay1-ay0));
+    const sx=(x0+x1)/2-(ax0+ax1)/2,sy=(y0+y1)/2-(ay0+ay1)/2;
+    const th=Math.tan(CAM.fov/2)*CAM.dist;const asp=CAM.cssW/CAM.cssH;
+    for(let c=0;c<3;c++)CAM.tgt[c]+=CAM.right[c]*sx*th*asp*0.9+CAM.up[c]*sy*th*0.9;
+    CAM.dist*=lerp(1,k,0.85);
+  }
+  camCompute();
+}
+const _o4=[0,0,0,0];
+function worldToScreen(x,y,z){xform(CAM.VP,x,y,z,_o4);return [(_o4[0]*0.5+0.5)*CAM.cssW,(0.5-_o4[1]*0.5)*CAM.cssH,_o4[3]];}
+function screenRay(cx,cy){
+  const nx=cx/CAM.cssW*2-1,ny=1-cy/CAM.cssH*2;
+  const a=xform(CAM.iVP,nx,ny,-1,[0,0,0,0]),b=xform(CAM.iVP,nx,ny,1,[0,0,0,0]);
+  let dx=b[0]-a[0],dy=b[1]-a[1],dz=b[2]-a[2];const l=Math.hypot(dx,dy,dz)||1;return {o:[a[0],a[1],a[2]],d:[dx/l,dy/l,dz/l]};
+}
+function rayY(r,y){const t=(y-r.o[1])/(r.d[1]||-1e-6);return [r.o[0]+r.d[0]*t,r.o[2]+r.d[2]*t];}
+function screenToSurface(cx,cy,lift){
+  const r=screenRay(cx,cy);let y=WL.trayY+(lift||0.03);let p=rayY(r,y);
+  for(let k=0;k<4;k++){y=supportY(p[0],p[1])+(lift||0.03);p=rayY(r,y);}
+  return p;
+}
+
+/* ---------------- materials ---------------- */
+const MAT={
+  enamel:{col:[0.016,0.016,0.019],rough:0.14,metal:0,coat:1.0,kind:2},
+  inner:{col:[0.05,0.048,0.05],rough:0.40,metal:0,coat:0.4,kind:9},
+  copper:{col:[0.96,0.62,0.45],rough:0.24,metal:1,coat:0,kind:3},
+  copperDk:{col:[0.80,0.46,0.30],rough:0.32,metal:1,coat:0,kind:3},
+  steel:{col:[0.30,0.29,0.28],rough:0.40,metal:1,coat:0,kind:7},
+  plate:{col:[0.935,0.93,0.905],rough:0.09,metal:0,coat:0.9,kind:4},
+  wood:{col:[0.5,0.33,0.18],rough:0.5,metal:0,coat:0.3,kind:1},
+  coil:{col:[0.25,0.20,0.17],rough:0.45,metal:0.7,coat:0,kind:8},
+  fur:{col:[0.93,0.80,0.60],rough:0.85,metal:0,coat:0,kind:5},
+  furDk:{col:[0.60,0.37,0.19],rough:0.85,metal:0,coat:0,kind:5},
+  furLt:{col:[0.95,0.89,0.78],rough:0.85,metal:0,coat:0,kind:5},
+  eye:{col:[0.012,0.010,0.010],rough:0.05,metal:0,coat:1.0,kind:0},
+  nose:{col:[0.035,0.028,0.028],rough:0.30,metal:0,coat:0.7,kind:0},
+  pink:{col:[0.90,0.42,0.46],rough:0.38,metal:0,coat:0.3,kind:6},
+  collar:{col:[0.72,0.14,0.13],rough:0.42,metal:0,coat:0.35,kind:0},
+  skin:{col:[0.88,0.63,0.50],rough:0.5,metal:0,coat:0,kind:6},
+  cuff:{col:[0.62,0.76,0.92],rough:0.75,metal:0,coat:0,kind:5},
+  cheese:{col:[1,0.9,0.6],rough:0.18,metal:0,coat:0.5,kind:10},
+  glass:{col:[1,1,1],rough:0.02,metal:0,coat:0,kind:0}
+};
+
+/* ---------------- scene meshes ---------------- */
+const MESH={};
+function buildScene(){
+  const I=WL.inner;
+  // table
+  {const g=Geo();gQuad(g,[-6,0,-4],[12,0,0],[0,0,10],[0,1,0]);MESH.table=meshFromGeo(g);}
+  // oven shell (enamel)
+  {const g=Geo();const X=WL.outerX;
+    gRBox(g,0,0.09,-0.135,X,0.066,0.635,0.034,5); // base
+    gRBox(g,0,0.33,-0.725,X,0.177,0.045,0.03,4); // back wall
+    gRBox(g,-0.745,0.33,-0.135,0.045,0.177,0.635,0.03,4); // left wall
+    gRBox(g,0.745,0.33,-0.135,0.045,0.177,0.635,0.03,4);  // right wall
+    MESH.shell=meshFromGeo(g);}
+  {const g=Geo();const X=WL.outerX; // top frame (foreground)
+    gRBox(g,0,0.516,0.47,X,0.018,0.032,0.016,4);
+    gRBox(g,0,0.516,-0.74,X,0.018,0.032,0.016,4);
+    gRBox(g,-0.762,0.516,-0.135,0.03,0.018,0.635,0.016,4);
+    gRBox(g,0.762,0.516,-0.135,0.03,0.018,0.635,0.016,4);
+    MESH.frame=meshFromGeo(g);}
+  {const g=Geo(); // interior floor & walls lining (lighter enamel)
+    gRBox(g,0,0.153,-0.125,0.70,0.004,0.555,0.003,1);
+    gQuad(g,[I.x0,0.157,I.z0+0.001],[I.x1-I.x0,0,0],[0,0.345,0],[0,0,1]);
+    gQuad(g,[I.x0+0.001,0.157,I.z0],[0,0,I.z1-I.z0],[0,0.345,0],[1,0,0]);
+    gQuad(g,[I.x1-0.001,0.157,I.z0],[0,0,I.z1-I.z0],[0,0.345,0],[-1,0,0]);
+    MESH.lining=meshFromGeo(g);}
+  {const g=Geo(); // feet
+    for(const x of [-0.68,0.68])for(const z of [-0.68,0.40])gLathe(g,[[0,0.0],[0.03,0.0],[0.036,0.006],[0.036,0.022],[0.028,0.028],[0,0.028]].map(p=>[p[0],p[1]]),20),
+      (()=>{const n=21*6;const st=g.p.length-n*3;for(let k=st;k<g.p.length;k+=3){g.p[k]+=x;g.p[k+2]+=z;}})();
+    MESH.feet=meshFromGeo(g);}
+  // tray (steel) + rack legs
+  {const g=Geo();const T=WL.tray;const cx=(T.x0+T.x1)/2,cz=(T.z0+T.z1)/2,hx=(T.x1-T.x0)/2,hz=(T.z1-T.z0)/2;
+    gRBox(g,cx,WL.trayY-0.008,cz,hx,0.008,hz,0.006,2);
+    gRBox(g,cx,WL.trayY+0.002,T.z0+0.008,hx,0.007,0.008,0.006,2);
+    gRBox(g,cx,WL.trayY+0.002,T.z1-0.008,hx,0.007,0.008,0.006,2);
+    gRBox(g,T.x0+0.008,WL.trayY+0.002,cz,0.008,0.007,hz,0.006,2);
+    gRBox(g,T.x1-0.008,WL.trayY+0.002,cz,0.008,0.007,hz,0.006,2);
+    MESH.tray=meshFromGeo(g);}
+  {const g=Geo();const T=WL.tray;
+    for(const z of [T.z0+0.08,T.z1-0.08])gTube(g,[[I.x0+0.01,0.19,z],[I.x1-0.01,0.19,z]],0.008,8);
+    for(const x of [T.x0+0.05,T.x1-0.05])for(const z of [T.z0+0.08,T.z1-0.08])gTube(g,[[x,0.157,z],[x,0.198,z]],0.007,8);
+    MESH.rack=meshFromGeo(g);}
+  // coils (heating elements along back and sides)
+  {const g=Geo();const pts=[];const zb=I.z0+0.035;
+    for(let k=0;k<=60;k++){const t=k/60;const x=lerp(I.x0+0.06,I.x1-0.06,t);pts.push([x,0.205+0.035*Math.sin(t*TAU*5),zb]);}
+    gTube(g,pts,0.0085,8);
+    for(const sx of [-1,1]){const p2=[];for(let k=0;k<=40;k++){const t=k/40;const z=lerp(I.z0+0.08,0.25,t);p2.push([sx*(I.x1-0.035),0.205+0.03*Math.sin(t*TAU*3.5),z]);}gTube(g,p2,0.0085,8);}
+    MESH.coil=meshFromGeo(g);}
+  // door (local: hinge at origin, extends +y)
+  {const g=Geo();const h=WL.doorTop-WL.doorBot;const hw=0.705;
+    gRBox(g,0,0.012,0,hw,0.013,0.014,0.010,3);
+    gRBox(g,0,h-0.012,0,hw,0.013,0.014,0.010,3);
+    gRBox(g,-hw+0.012,h/2,0,0.013,h/2,0.014,0.010,3);
+    gRBox(g,hw-0.012,h/2,0,0.013,h/2,0.014,0.010,3);
+    MESH.doorFrame=meshFromGeo(g);
+    const g2=Geo();gTube(g2,[[-0.38,h*0.55,0.045],[-0.30,h*0.55,0.050],[0.30,h*0.55,0.050],[0.38,h*0.55,0.045]],0.011,10);
+    gTube(g2,[[-0.36,h*0.55,0.0],[-0.36,h*0.55,0.048]],0.008,8);gTube(g2,[[0.36,h*0.55,0.0],[0.36,h*0.55,0.048]],0.008,8);
+    MESH.handle=meshFromGeo(g2);
+    const g3=Geo();gQuad(g3,[-hw+0.02,0.02,0.0],[2*hw-0.04,0,0],[0,h-0.04,0],[0,0,1]);MESH.doorGlass=meshFromGeo(g3);}
+  {const g=Geo();gQuad(g,[I.x0,0.512,I.z0-0.02],[I.x1-I.x0,0,0],[0,0,I.z1-I.z0+0.04],[0,1,0]);MESH.topGlass=meshFromGeo(g);}
+  // dials (local: facing +z, axis z)
+  {const mk=(R,dep,teeth)=>{const g=Geo();const prof=[];
+      prof.push([0,dep+0.006]);for(let k=0;k<=6;k++){const a=k/6*PI/2;prof.push([R*0.82+Math.sin(a)*R*0.14,dep+0.006-(1-Math.cos(a))*0.008]);}
+      prof.push([R,dep*0.7]);prof.push([R,0.004]);prof.push([R*1.06,0.0]);
+      // lathe around y, then rotate so axis is z
+      gLathe(g,prof.map(p=>p).reverse(),48);
+      for(let k=0;k<g.p.length;k+=3){const x=g.p[k],y=g.p[k+1],z=g.p[k+2];
+        const ang=Math.atan2(x,z);const rr=Math.hypot(x,z);const kn=(rr>R*0.97&&y<dep*0.75)?1+0.035*Math.max(0,Math.cos(ang*teeth)):1;
+        g.p[k]=x*kn;g.p[k+1]=z*kn;g.p[k+2]=y;const nx=g.n[k],ny=g.n[k+1],nz=g.n[k+2];g.n[k]=nx;g.n[k+1]=nz;g.n[k+2]=ny;}
+      // pointer ridge
+      gRBox(g,0,R*0.45,dep+0.006,R*0.07,R*0.38,0.006,0.004,2);
+      return meshFromGeo(g);};
+    MESH.dialBig=mk(0.056,0.032,30);MESH.dialSmall=mk(0.036,0.026,20);}
+  // dial back plate (copper ring)
+  {const g=Geo();gLathe(g,[[0.085,0.0],[0.088,0.002],[0.088,0.004],[0.0,0.004]],40);
+    for(let k=0;k<g.p.length;k+=3){const x=g.p[k],y=g.p[k+1],z=g.p[k+2];g.p[k]=x;g.p[k+1]=z;g.p[k+2]=y;const nx=g.n[k],ny=g.n[k+1],nz=g.n[k+2];g.n[k]=nx;g.n[k+1]=nz;g.n[k+2]=ny;}
+    MESH.dialPlate=meshFromGeo(g);}
+  buildPlate();
+  // unit sphere for character parts
+  {const g=Geo();gSphere(g,1,1,1,26,18);MESH.sphere=meshFromGeo(g);}
+  {const g=Geo();gQuad(g,[-1,0,-1],[2,0,0],[0,0,2],[0,1,0]);MESH.blob=meshFromGeo(g);}
+  {const g=Geo();const pts=[];for(let k=0;k<=24;k++){const a=k/24*TAU;pts.push([Math.cos(a)*0.083,0,Math.sin(a)*0.083]);}gTube(g,pts,0.0085,8);MESH.collar=meshFromGeo(g);}
+  // fullscreen tri
+  MESH.fs=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,MESH.fs);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+}
+function buildPlate(){
+  if(MESH.plate&&MESH.plate.vbo){gl.deleteBuffer(MESH.plate.vbo);gl.deleteBuffer(MESH.plate.ibo);}
+  const R=LAY.plate.r;const g=Geo();
+  const prof=[[0,0.007],[R*0.5,0.007],[R*0.54,0.0],[R*0.6,0.007],[R*0.84,0.019],[R*0.97,0.033],[R,0.046],[R*0.985,0.051],[R*0.95,0.047],[R*0.88,0.036],[R*0.78,0.023],[R*0.70,0.020],[R*0.3,0.020],[0,0.020]];
+  gLathe(g,prof,64);MESH.plate=meshFromGeo(g);
+}
+
+/* ---------------- draw helpers ---------------- */
+let attribsOn=0;
+function setAttribs(n){for(let i=attribsOn;i<n;i++)gl.enableVertexAttribArray(i);for(let i=n;i<attribsOn;i++)gl.disableVertexAttribArray(i);attribsOn=n;}
+const NM9=new Float32Array(9);const MTMP=M4.create();
+let curProg=null;
+function useProg(pr){if(curProg!==pr){gl.useProgram(pr.p);curProg=pr;}}
+function setFrameUniforms(pr){
+  const u=pr.u;gl.useProgram(pr.p);curProg=pr;
+  if(u.uVP)gl.uniformMatrix4fv(u.uVP,false,CAM.VP);
+  if(u.uCam)gl.uniform3fv(u.uCam,CAM.eye);
+  if(u.uKeyDir)gl.uniform3fv(u.uKeyDir,LIGHT.dir);
+  if(u.uKeyCol)gl.uniform3fv(u.uKeyCol,LIGHT.col);
+  if(u.uOvenCol)gl.uniform3fv(u.uOvenCol,LIGHT.oven);
+  if(u.uGlow)gl.uniform1f(u.uGlow,LIGHT.glow);
+  if(u.uWarm)gl.uniform1f(u.uWarm,LIGHT.warm);
+  if(u.uOvenBox)gl.uniform4f(u.uOvenBox,WL.inner.x0,WL.inner.x1,WL.inner.z0,WL.inner.z1+0.02);
+  if(u.uTime)gl.uniform1f(u.uTime,TIME.t%1000);
+  if(u.uOvenOff)gl.uniform1f(u.uOvenOff,0);
+}
+const LIGHT={dir:[0,1,0],col:[2.25,2.12,1.95],oven:[0.42,0.5,0.6],glow:0,warm:0};
+{const d=[-0.42,1.0,0.55];const l=Math.hypot(d[0],d[1],d[2]);LIGHT.dir=[d[0]/l,d[1]/l,d[2]/l];}
+function bindStd(m){gl.bindBuffer(gl.ARRAY_BUFFER,m.vbo);setAttribs(3);
+  gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0);gl.vertexAttribPointer(1,3,gl.FLOAT,false,32,12);gl.vertexAttribPointer(2,2,gl.FLOAT,false,32,24);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,m.ibo);}
+function drawMesh(m,M,mat,opt){
+  const pr=curProg;const u=pr.u;
+  gl.uniformMatrix4fv(u.uM,false,M);M4.normal3(NM9,M);if(u.uNM)gl.uniformMatrix3fv(u.uNM,false,NM9);
+  if(mat){
+    if(u.uCol)gl.uniform3fv(u.uCol,(opt&&opt.col)||mat.col);
+    if(u.uRough)gl.uniform1f(u.uRough,mat.rough);if(u.uMetal)gl.uniform1f(u.uMetal,mat.metal);
+    if(u.uCoat)gl.uniform1f(u.uCoat,mat.coat);if(u.uKind)gl.uniform1f(u.uKind,mat.kind);
+    if(u.uAlpha)gl.uniform1f(u.uAlpha,(opt&&opt.alpha!=null)?opt.alpha:1);
+    if(u.uEmit){const e=(opt&&opt.emit)||[0,0,0];gl.uniform3f(u.uEmit,e[0],e[1],e[2]);}
+    if(u.uAO)gl.uniform1f(u.uAO,(opt&&opt.ao!=null)?opt.ao:1);
+    if(u.uParam){const p=(opt&&opt.param)||[0,0,0,0];gl.uniform4f(u.uParam,p[0],p[1],p[2],p[3]);}
+  }
+  bindStd(m);gl.drawElements(gl.TRIANGLES,m.count,gl.UNSIGNED_SHORT,0);
+}
+const IDM=M4.create();const BLOBC=[0,0,0];
+function drawBlob(cx,cz,sx,sz,str,soft,rect,y,rotY){
+  const M=M4.ident(MTMP);M4.translate(M,cx,y||0.0015,cz);if(rotY)M4.rotY(M,rotY);M4.scale(M,sx,1,sz);
+  const u=PR.blob.u;gl.uniformMatrix4fv(u.uM,false,M);if(u.uBC)gl.uniform3f(u.uBC,BLOBC[0],BLOBC[1],BLOBC[2]);gl.uniform1f(u.uStr,str);gl.uniform1f(u.uSoft,soft);gl.uniform1f(u.uRect,rect?1:0);
+  bindStd(MESH.blob);gl.drawElements(gl.TRIANGLES,MESH.blob.count,gl.UNSIGNED_SHORT,0);
+}
+
+/* ---------------- characters: dog & hand ---------------- */
+// part: [parent, cx,cy,cz, rx,ry,rz, pitch,yaw,roll, mat]
+const DOG_PARTS={
+  body:[
+    ['body',0,0.135,-0.025,0.098,0.118,0.125,-0.38,0,0,'fur'],
+    ['body',0,0.175,0.055,0.083,0.095,0.075,-0.2,0,0,'furLt'],
+    ['body',-0.072,0.065,-0.07,0.066,0.068,0.088,0,0.15,0,'fur'],
+    ['body',0.072,0.065,-0.07,0.066,0.068,0.088,0,-0.15,0,'fur'],
+    ['body',-0.048,0.075,0.075,0.028,0.07,0.03,0.12,0,0,'fur'],
+    ['body',0.048,0.075,0.075,0.028,0.07,0.03,0.12,0,0,'fur'],
+    ['body',-0.05,0.016,0.112,0.033,0.022,0.044,0,0,0,'furLt'],
+    ['body',0.05,0.016,0.112,0.033,0.022,0.044,0,0,0,'furLt'],
+    ['body',-0.095,0.02,-0.02,0.03,0.02,0.05,0,0.3,0,'furLt'],
+    ['body',0.095,0.02,-0.02,0.03,0.02,0.05,0,-0.3,0,'furLt'],
+    ['body',0.03,0.17,-0.09,0.05,0.06,0.06,-0.3,0,0,'furDk']
+  ],
+  head:[
+    ['head',0,0.075,0,0.108,0.096,0.098,0,0,0,'fur'],
+    ['head',-0.052,0.038,0.048,0.062,0.05,0.052,0,0,0,'furLt'],
+    ['head',0.052,0.038,0.048,0.062,0.05,0.052,0,0,0,'furLt'],
+    ['head',0,0.036,0.086,0.054,0.042,0.056,0.1,0,0,'furLt'],
+    ['head',0,0.06,0.137,0.023,0.017,0.015,0,0,0,'nose'],
+    ['head',0.048,0.098,0.06,0.04,0.035,0.03,0,0,0,'furDk'],
+    ['eyeL',0,0,0,0.0185,0.0185,0.0185,0,0,0,'eye'],
+    ['eyeR',0,0,0,0.0185,0.0185,0.0185,0,0,0,'eye'],
+    ['earL',0,-0.055,0,0.026,0.078,0.052,0,0,0,'furDk'],
+    ['earR',0,-0.055,0,0.026,0.078,0.052,0,0,0,'furDk'],
+    ['jaw',0,-0.006,0.035,0.04,0.018,0.042,0,0,0,'furLt'],
+    ['tongue',0,0,0.02,0.02,0.007,0.03,0,0,0,'pink']
+  ],
+  tail:[['tail',0,0.04,0,0.022,0.06,0.022,0,0,0,'fur'],['tail',0,0.095,0,0.024,0.03,0.024,0,0,0,'furLt']]
+};
+const DOG={x:0,z:0,yaw:0,s:1.18,hy:0,hp:0,hr:0,ty:0,tp:0,tr:0,look:[0,0.3,0],blink:0,blinkT:2.5,wag:0.3,wagP:0,
+  earL:0,earR:0,earVL:0,earVR:0,lean:0,leanT:0,jaw:0,eating:null,happy:0,sniff:0,perk:0,breath:0,tilt:0,tiltT:0,
+  mouthW:[0,0,0],headW:[0,0,0],bob:0,wiggle:0};
+const MB=M4.create(),MH=M4.create(),MX=M4.create();
+function partMatrix(parentM,p,out){
+  M4.copy(out,parentM);M4.translate(out,p[1],p[2],p[3]);
+  if(p[8])M4.rotY(out,p[8]);if(p[7])M4.rotX(out,p[7]);if(p[9])M4.rotZ(out,p[9]);
+  M4.scale(out,p[4],p[5],p[6]);return out;
+}
+function dogMatrices(){
+  const d=DOG;
+  M4.ident(MB);M4.translate(MB,d.x,0,d.z);M4.rotY(MB,d.yaw);M4.scale(MB,d.s,d.s,d.s);
+  const br=1+0.012*Math.sin(d.breath);
+  // head
+  M4.copy(MH,MB);M4.translate(MH,0,0.262+d.bob,0.05+d.lean*0.12);
+  M4.rotY(MH,d.hy);M4.rotX(MH,d.hp+d.lean*0.55);M4.rotZ(MH,d.hr);
+  M4.scale(MH,br,br,br);
+  return br;
+}
+function drawDog(){
+  const d=DOG;dogMatrices();
+  const m=M4.create();
+  const parts=DOG_PARTS.body;
+  for(const p of parts){partMatrix(MB,p,m);drawMesh(MESH.sphere,m,MAT[p[10]]);}
+  // collar
+  {M4.copy(m,MB);M4.translate(m,0,0.225,0.045);M4.rotX(m,-0.35);drawMesh(MESH.collar,m,MAT.collar);
+   M4.copy(m,MB);M4.translate(m,0,0.19,0.135);M4.rotX(m,0.3);M4.scale(m,0.018,0.018,0.006);drawMesh(MESH.sphere,m,MAT.copper);}
+  // tail
+  {const t=M4.create();M4.copy(t,MB);M4.translate(t,0,0.07,-0.14);M4.rotX(t,-0.9);M4.rotZ(t,Math.sin(d.wagP)*0.55*(0.4+d.wag));
+   for(const p of DOG_PARTS.tail){partMatrix(t,p,m);drawMesh(MESH.sphere,m,MAT[p[10]]);}}
+  // head
+  for(const p of DOG_PARTS.head){
+    const nm=p[0];
+    if(nm==='head'){partMatrix(MH,p,m);}
+    else if(nm==='eyeL'||nm==='eyeR'){const sx=nm==='eyeL'?-1:1;M4.copy(m,MH);M4.translate(m,sx*0.043,0.088,0.083);M4.scale(m,1,Math.max(0.12,1-d.blink),1);partMatrix(m,p,m);}
+    else if(nm==='earL'||nm==='earR'){const sx=nm==='earL'?-1:1;const ea=nm==='earL'?d.earL:d.earR;
+      M4.copy(m,MH);M4.translate(m,sx*0.088,0.125,-0.005);M4.rotZ(m,sx*(0.32+ea*0.5-d.perk*0.25));M4.rotX(m,0.15+ea*0.2);partMatrix(m,p,m);}
+    else if(nm==='jaw'){M4.copy(m,MH);M4.translate(m,0,0.03,0.06);M4.rotX(m,d.jaw*0.5);partMatrix(m,p,m);}
+    else if(nm==='tongue'){if(d.jaw<0.15&&d.happy<0.3)continue;M4.copy(m,MH);M4.translate(m,0,0.025,0.06);M4.rotX(m,d.jaw*0.45);M4.translate(m,0,-0.004,0.03);partMatrix(m,p,m);}
+    drawMesh(MESH.sphere,m,MAT[p[10]]);
+  }
+  // world positions for gaze/eating
+  xform(MH,0,0.05,0.14,_o4);d.mouthW[0]=_o4[0];d.mouthW[1]=_o4[1];d.mouthW[2]=_o4[2];
+  xform(MH,0,0.08,0.0,_o4);d.headW[0]=_o4[0];d.headW[1]=_o4[1];d.headW[2]=_o4[2];
+}
+function dogHeadWorld(){dogMatrices();xform(MH,0,0.08,0,_o4);return [_o4[0],_o4[1],_o4[2]];}
+function dogMouthWorld(){dogMatrices();xform(MH,0,0.03,0.15,_o4);return [_o4[0],_o4[1],_o4[2]];}
+
+const HAND_PARTS=[
+  // x,y,z, rx,ry,rz, pitch,yaw,roll, mat   (fingertip at origin, finger runs toward +z / up)
+  [0,0.009,0.006, 0.0118,0.0112,0.016, -0.25,0,0,'skin'],
+  [0,0.018,0.031, 0.0128,0.0122,0.021, -0.3,0,0,'skin'],
+  [0,0.029,0.058, 0.0138,0.0132,0.022, -0.3,0,0,'skin'],
+  [0.012,0.043,0.104, 0.050,0.025,0.047, -0.2,0,0.08,'skin'],
+  [0.024,0.026,0.074, 0.0118,0.0128,0.017, 0.5,0,0,'skin'],
+  [0.041,0.028,0.079, 0.0112,0.0122,0.016, 0.5,0,0,'skin'],
+  [0.056,0.031,0.087, 0.0102,0.0112,0.015, 0.5,0,0,'skin'],
+  [-0.034,0.036,0.083, 0.0122,0.0118,0.026, -0.1,0.55,0,'skin'],
+  [0.010,0.050,0.168, 0.042,0.031,0.054, -0.2,0,0,'cuff']
+];
+const HAND={on:false,a:0,x:0,y:0,z:0,press:0,yaw:0};
+function drawHand(){
+  if(!HAND.on||HAND.a<0.01)return;
+  const M=M4.create(),m=M4.create();
+  if(PR.std.u.uOvenOff)gl.uniform1f(PR.std.u.uOvenOff,1);
+  const sc=2.9*(0.8+0.2*HAND.a);
+  M4.translate(M,HAND.x,HAND.y+0.002+(1-HAND.press)*0.045,HAND.z);M4.rotY(M,HAND.yaw);M4.scale(M,sc,sc,sc);
+  for(const p of HAND_PARTS){M4.copy(m,M);M4.translate(m,p[0],p[1],p[2]);if(p[7])M4.rotY(m,p[7]);if(p[6])M4.rotX(m,p[6]);if(p[8])M4.rotZ(m,p[8]);M4.scale(m,p[3],p[4],p[5]);
+    drawMesh(MESH.sphere,m,MAT[p[9]],{alpha:HAND.a});}
+  if(PR.std.u.uOvenOff)gl.uniform1f(PR.std.u.uOvenOff,0);
+}
+
+/* ================= dough simulation ================= */
+const S0=0.036;
+const T_RIM=0.040,T_IN=0.021;
+const MAXP=1500,MAXT=2900,MAXE=4800;
+const P={n:0,cnt:0,free:[],
+  alive:new Uint8Array(MAXP),x:new Float32Array(MAXP),z:new Float32Array(MAXP),px:new Float32Array(MAXP),pz:new Float32Array(MAXP),
+  fx:new Float32Array(MAXP),fz:new Float32Array(MAXP),ex:new Float32Array(MAXP),ez:new Float32Array(MAXP),
+  gx:new Float32Array(MAXP),gz:new Float32Array(MAXP),w:new Float32Array(MAXP),
+  vol:new Float32Array(MAXP),area:new Float32Array(MAXP),thick:new Float32Array(MAXP),hR:new Float32Array(MAXP),
+  bake:new Float32Array(MAXP),bakeR:new Float32Array(MAXP),toast:new Float32Array(MAXP),
+  lift:new Float32Array(MAXP),liftV:new Float32Array(MAXP),liftT:new Float32Array(MAXP),
+  layer:new Uint8Array(MAXP),layerT:new Float32Array(MAXP),air:new Float32Array(MAXP),
+  mu:new Float32Array(MAXP),mv:new Float32Array(MAXP),
+  soft:new Uint8Array(MAXP),edited:new Uint8Array(MAXP),wasBaked:new Uint8Array(MAXP),
+  welds:new Uint8Array(MAXP),bnd:new Uint8Array(MAXP),piece:new Int32Array(MAXP),
+  glow:new Float32Array(MAXP),crack:new Float32Array(MAXP),seam:new Float32Array(MAXP),sag:new Float32Array(MAXP),
+  dent:new Float32Array(MAXP),bend:new Float32Array(MAXP),bendX:new Float32Array(MAXP),bendZ:new Float32Array(MAXP),
+  kind:new Uint8Array(MAXP), // band class at bake: 0 none 1 ear 2 wing
+  inD:new Uint8Array(MAXP),eat:new Uint8Array(MAXP),spring:new Float32Array(MAXP),dg:new Float32Array(MAXP)
+};
+const TR={n:0,cnt:0,free:[],alive:new Uint8Array(MAXT),a:new Int32Array(MAXT),b:new Int32Array(MAXT),c:new Int32Array(MAXT),vol:new Float32Array(MAXT),ar:new Float32Array(MAXT)};
+const ED={n:0,cnt:0,free:[],alive:new Uint8Array(MAXE),a:new Int32Array(MAXE),b:new Int32Array(MAXE),rest:new Float32Array(MAXE),
+  type:new Uint8Array(MAXE),wk:new Uint8Array(MAXE),t0:new Int32Array(MAXE),t1:new Int32Array(MAXE),born:new Float32Array(MAXE)};
+const EMAP=new Map();
+const ekey=(a,b)=>a<b?a*MAXP+b:b*MAXP+a;
+let topoDirty=true;
+
+function resetDough(){
+  P.n=0;P.cnt=0;P.free.length=0;P.alive.fill(0);
+  TR.n=0;TR.cnt=0;TR.free.length=0;TR.alive.fill(0);
+  ED.n=0;ED.cnt=0;ED.free.length=0;ED.alive.fill(0);EMAP.clear();topoDirty=true;
+}
+function addP(x,z,mu,mv){
+  let i;if(P.free.length)i=P.free.pop();else{if(P.n>=MAXP)return -1;i=P.n++;}
+  P.alive[i]=1;P.cnt++;P.x[i]=P.px[i]=P.fx[i]=P.ex[i]=x;P.z[i]=P.pz[i]=P.fz[i]=P.ez[i]=z;P.mu[i]=mu;P.mv[i]=mv;
+  P.vol[i]=0;P.area[i]=0;P.thick[i]=T_IN;P.hR[i]=T_IN;P.bake[i]=1;P.bakeR[i]=0;P.toast[i]=0;P.lift[i]=0;P.liftV[i]=0;P.liftT[i]=0;
+  P.layer[i]=0;P.layerT[i]=0;P.air[i]=0;P.soft[i]=0;P.edited[i]=0;P.wasBaked[i]=0;P.welds[i]=0;P.bnd[i]=0;P.piece[i]=0;
+  P.glow[i]=0;P.crack[i]=0;P.seam[i]=0;P.sag[i]=0;P.dent[i]=0;P.w[i]=0;P.spring[i]=0;P.inD[i]=0;P.eat[i]=0;P.bend[i]=0;P.bendX[i]=0;P.bendZ[i]=0;P.kind[i]=0;
+  return i;
+}
+function killP(i){if(!P.alive[i])return;P.alive[i]=0;P.cnt--;P.free.push(i);}
+function addEdge(a,b,type,t){
+  const k=ekey(a,b);let e=EMAP.get(k);
+  if(e!==undefined){if(t>=0){if(ED.t0[e]<0)ED.t0[e]=t;else if(ED.t1[e]<0)ED.t1[e]=t;}return e;}
+  if(ED.free.length)e=ED.free.pop();else{if(ED.n>=MAXE)return -1;e=ED.n++;}
+  ED.alive[e]=1;ED.cnt++;ED.a[e]=a;ED.b[e]=b;ED.type[e]=type;ED.wk[e]=0;ED.t0[e]=t;ED.t1[e]=-1;ED.born[e]=TIME.t;
+  ED.rest[e]=Math.hypot(P.x[a]-P.x[b],P.z[a]-P.z[b]);EMAP.set(k,e);topoDirty=true;return e;
+}
+function killEdge(e){if(!ED.alive[e])return;ED.alive[e]=0;ED.cnt--;ED.free.push(e);EMAP.delete(ekey(ED.a[e],ED.b[e]));
+  if(ED.type[e]===1){P.welds[ED.a[e]]=Math.max(0,P.welds[ED.a[e]]-1);P.welds[ED.b[e]]=Math.max(0,P.welds[ED.b[e]]-1);}topoDirty=true;}
+function addTri(a,b,c,vol){
+  let t;if(TR.free.length)t=TR.free.pop();else{if(TR.n>=MAXT)return -1;t=TR.n++;}
+  TR.alive[t]=1;TR.cnt++;TR.a[t]=a;TR.b[t]=b;TR.c[t]=c;TR.vol[t]=vol;
+  addEdge(a,b,0,t);addEdge(b,c,0,t);addEdge(c,a,0,t);topoDirty=true;return t;
+}
+function detachTriFromEdge(a,b,t){const e=EMAP.get(ekey(a,b));if(e===undefined)return;
+  if(ED.t0[e]===t){ED.t0[e]=ED.t1[e];ED.t1[e]=-1;}else if(ED.t1[e]===t)ED.t1[e]=-1;
+  if(ED.t0[e]<0&&ED.type[e]===0)killEdge(e);}
+function killTri(t){if(!TR.alive[t])return;TR.alive[t]=0;TR.cnt--;TR.free.push(t);const a=TR.a[t],b=TR.b[t],c=TR.c[t];
+  detachTriFromEdge(a,b,t);detachTriFromEdge(b,c,t);detachTriFromEdge(c,a,t);topoDirty=true;}
+function triArea(a,b,c){return Math.abs((P.x[b]-P.x[a])*(P.z[c]-P.z[a])-(P.x[c]-P.x[a])*(P.z[b]-P.z[a]))*0.5;}
+
+/* split edge e at midpoint (keeps volume, interpolates attributes) */
+function splitEdge(e){
+  if(P.cnt>=MAXP-2||TR.cnt>=MAXT-3||ED.cnt>=MAXE-6)return false;
+  const a=ED.a[e],b=ED.b[e];const rest=ED.rest[e];
+  const ts=[ED.t0[e],ED.t1[e]].filter(t=>t>=0&&TR.alive[t]);
+  const m=addP((P.x[a]+P.x[b])/2,(P.z[a]+P.z[b])/2,(P.mu[a]+P.mu[b])/2,(P.mv[a]+P.mv[b])/2);if(m<0)return false;
+  P.px[m]=(P.px[a]+P.px[b])/2;P.pz[m]=(P.pz[a]+P.pz[b])/2;
+  for(const k of ['bake','toast','lift','liftV','air','w','gx','gz','ex','ez','fx','fz','glow','sag','dg']){P[k][m]=(P[k][a]+P[k][b])/2;}
+  P.bakeR[m]=Math.max(P.bakeR[a],P.bakeR[b]);P.soft[m]=P.soft[a]|P.soft[b];P.edited[m]=P.edited[a]|P.edited[b];P.layer[m]=(P.layer[a]&&P.layer[b])?1:0;
+  P.wasBaked[m]=P.wasBaked[a]|P.wasBaked[b];P.piece[m]=P.piece[a];P.kind[m]=0;
+  P.inD[m]=P.inD[a]|P.inD[b];if(P.inD[m]&&DRAG.active)DRAG.list.push(m);
+  // remove old triangles
+  const tris=ts.map(t=>{const v=[TR.a[t],TR.b[t],TR.c[t]];const c=v.find(q=>q!==a&&q!==b);
+    // keep orientation
+    const ia=v.indexOf(a),ib=v.indexOf(b);const fwd=((ia+1)%3)===ib;return {c,vol:TR.vol[t],fwd,t};});
+  for(const q of tris)killTri(q.t);
+  if(ED.alive[e])killEdge(e);
+  const e1=addEdge(a,m,0,-1),e2=addEdge(m,b,0,-1);
+  if(e1>=0)ED.rest[e1]=rest/2;if(e2>=0)ED.rest[e2]=rest/2;
+  for(const q of tris){
+    if(q.fwd){addTri(a,m,q.c,q.vol/2);addTri(m,b,q.c,q.vol/2);}else{addTri(m,a,q.c,q.vol/2);addTri(b,m,q.c,q.vol/2);}
+  }
+  if(!tris.length){/* free edge (shouldn't happen) */}
+  return true;
+}
+
+/* ---- dough construction ---- */
+// shapeFn(x,z) -> true if inside. Builds hex lattice.
+function buildDough(shapeFn,bbox,opts){
+  resetDough();
+  opts=opts||{};
+  const s=S0,h=s*Math.sqrt(3)/2;
+  const nx=Math.ceil((bbox.x1-bbox.x0)/s)+2,nz=Math.ceil((bbox.z1-bbox.z0)/h)+2;
+  const idx=new Int32Array(nx*nz).fill(-1);
+  const jit=0.06*s;
+  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){
+    const x=bbox.x0+(i+(j&1)*0.5)*s,z=bbox.z0+j*h;
+    if(!shapeFn(x,z))continue;
+    const p=addP(x+(rnd()-0.5)*jit,z+(rnd()-0.5)*jit,x,z);idx[j*nx+i]=p;
+  }
+  const g=(i,j)=>(i>=0&&j>=0&&i<nx&&j<nz)?idx[j*nx+i]:-1;
+  const tl=[];
+  for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){
+    let A,B,C,D2;
+    if((j&1)===0){A=g(i,j);B=g(i+1,j);C=g(i,j+1);if(A>=0&&B>=0&&C>=0)tl.push([A,B,C]);
+      A=g(i+1,j);B=g(i+1,j+1);C=g(i,j+1);if(A>=0&&B>=0&&C>=0)tl.push([A,B,C]);}
+    else{A=g(i,j);B=g(i+1,j);C=g(i+1,j+1);if(A>=0&&B>=0&&C>=0)tl.push([A,B,C]);
+      A=g(i,j);B=g(i+1,j+1);C=g(i,j+1);if(A>=0&&B>=0&&C>=0)tl.push([A,B,C]);}
+  }
+  // drop particles not in any triangle
+  const used=new Uint8Array(MAXP);for(const t of tl){used[t[0]]=used[t[1]]=used[t[2]]=1;}
+  for(let i=0;i<P.n;i++)if(P.alive[i]&&!used[i])killP(i);
+  // hop distance from boundary (count neighbors)
+  const nb=new Uint8Array(MAXP);for(const t of tl){nb[t[0]]++;nb[t[1]]++;nb[t[2]]++;}
+  const dist=new Float32Array(MAXP).fill(99);const q=[];
+  for(let i=0;i<P.n;i++)if(P.alive[i]&&nb[i]<6){dist[i]=0;q.push(i);}
+  const adj=new Map();const link=(a,b)=>{if(!adj.has(a))adj.set(a,[]);adj.get(a).push(b);};
+  for(const t of tl){link(t[0],t[1]);link(t[1],t[0]);link(t[1],t[2]);link(t[2],t[1]);link(t[2],t[0]);link(t[0],t[2]);}
+  for(let k=0;k<q.length;k++){const a=q[k];for(const b of (adj.get(a)||[])){if(dist[b]>dist[a]+1){dist[b]=dist[a]+1;q.push(b);}}}
+  const thickAt=(i)=>{const d=dist[i];let t=lerp(T_RIM,T_IN,sstep(1.1,2.6,d));t*=1+(rnd()-0.5)*0.06;if(opts.thickFn)t=opts.thickFn(i,t,d);return t;};
+  const th=new Float32Array(MAXP);for(let i=0;i<P.n;i++)if(P.alive[i])th[i]=thickAt(i);
+  for(const t of tl){const ar=triArea(t[0],t[1],t[2]);addTri(t[0],t[1],t[2],ar*(th[t[0]]+th[t[1]]+th[t[2]])/3);}
+  for(let e=0;e<ED.n;e++)if(ED.alive[e])ED.rest[e]=Math.hypot(P.x[ED.a[e]]-P.x[ED.b[e]],P.z[ED.a[e]]-P.z[ED.b[e]]);
+  computeDerived();computePieces();
+}
+function circleShape(cx,cz,r){return (x,z)=>Math.hypot(x-cx,z-cz)<=r;}
+
+/* ---- derived quantities ---- */
+const PUFF=1.15;
+function computeDerived(){
+  const n=P.n;P.area.fill(0,0,n);P.vol.fill(0,0,n);
+  for(let t=0;t<TR.n;t++){if(!TR.alive[t])continue;const a=TR.a[t],b=TR.b[t],c=TR.c[t];
+    let ar=triArea(a,b,c);TR.ar[t]=ar;ar=Math.max(ar,1e-6);const v=TR.vol[t];
+    P.area[a]+=ar/3;P.area[b]+=ar/3;P.area[c]+=ar/3;P.vol[a]+=v/3;P.vol[b]+=v/3;P.vol[c]+=v/3;}
+  P.bnd.fill(0,0,n);
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;if(ED.t1[e]<0){P.bnd[ED.a[e]]=1;P.bnd[ED.b[e]]=1;}}
+  for(let i=0;i<n;i++){if(!P.alive[i])continue;
+    const ar=Math.max(P.area[i],S0*S0*0.08);let th=P.vol[i]/ar;if(!(th>0))th=T_IN;th=Math.min(th,T_RIM*2.6);P.thick[i]=th;
+    const pf=sstep(0.0185,0.034,th);P.hR[i]=th*(1+PUFF*P.bake[i]*pf)*(P.kind[i]===1?1+0.75*P.bake[i]:1);}
+}
+function puffOf(i){return sstep(0.0185,0.034,P.thick[i])*P.bake[i];}
+function crispOf(i){return P.bake[i]*(1-sstep(0.010,0.020,P.thick[i]));}
+
+/* ---- pieces (connected components) ---- */
+let PIECES=[];
+function computePieces(){
+  const n=P.n;const lab=P.piece;for(let i=0;i<n;i++)lab[i]=-1;
+  const adj=buildAdj();
+  PIECES=[];
+  for(let i=0;i<n;i++){if(!P.alive[i]||lab[i]>=0)continue;const id=PIECES.length;const list=[i];lab[i]=id;
+    for(let k=0;k<list.length;k++){const a=list[k];const s=adj.start[a],e2=adj.start[a+1];for(let q=s;q<e2;q++){const b=adj.nb[q];if(lab[b]<0){lab[b]=id;list.push(b);}}}
+    PIECES.push({id,list});}
+  // remove tiny isolated particles with no triangles
+  for(const pc of PIECES){if(pc.list.length<3){for(const i of pc.list){if(P.area[i]<1e-6){killP(i);}}}}
+  PIECES=PIECES.filter(pc=>pc.list.some(i=>P.alive[i]));
+  PIECES.forEach((pc,k)=>{pc.id=k;pc.list=pc.list.filter(i=>P.alive[i]);for(const i of pc.list)lab[i]=k;});
+  for(const pc of PIECES)pieceStats(pc);
+  topoDirty=false;ADJ=null;
+}
+let ADJ=null;
+function buildAdj(){
+  if(ADJ&&!topoDirty)return ADJ;
+  const n=P.n;const deg=new Int32Array(n+1);
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;deg[ED.a[e]]++;deg[ED.b[e]]++;}
+  const start=new Int32Array(n+1);for(let i=0;i<n;i++)start[i+1]=start[i]+deg[i];
+  const fill=start.slice();const nb=new Int32Array(start[n]);const ne=new Int32Array(start[n]);
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;const a=ED.a[e],b=ED.b[e];nb[fill[a]]=b;ne[fill[a]++]=e;nb[fill[b]]=a;ne[fill[b]++]=e;}
+  ADJ={start,nb,ne,n};return ADJ;
+}
+function pieceStats(pc){
+  let sx=0,sz=0,ar=0,vol=0;for(const i of pc.list){sx+=P.x[i]*P.area[i];sz+=P.z[i]*P.area[i];ar+=P.area[i];vol+=P.vol[i];}
+  ar=Math.max(ar,1e-9);pc.cx=sx/ar;pc.cz=sz/ar;pc.area=ar;pc.vol=vol;let rm=0;for(const i of pc.list)rm=Math.max(rm,Math.hypot(P.x[i]-pc.cx,P.z[i]-pc.cz));pc.rmax=rm;return pc;
+}
+
+/* ---- spatial hash ---- */
+const HG={x0:-1.0,z0:-0.9,cs:S0,nx:0,nz:0,start:null,cnt:null,items:null};
+HG.nx=Math.ceil(2.3/HG.cs);HG.nz=Math.ceil(2.8/HG.cs);HG.start=new Int32Array(HG.nx*HG.nz+1);HG.cnt=new Int32Array(HG.nx*HG.nz);HG.items=new Int32Array(MAXP);
+const hcell=(x,z)=>{const i=clamp(Math.floor((x-HG.x0)/HG.cs),0,HG.nx-1),j=clamp(Math.floor((z-HG.z0)/HG.cs),0,HG.nz-1);return j*HG.nx+i;};
+function buildHash(){
+  HG.cnt.fill(0);for(let i=0;i<P.n;i++)if(P.alive[i])HG.cnt[hcell(P.x[i],P.z[i])]++;
+  HG.start[0]=0;for(let c=0;c<HG.cnt.length;c++)HG.start[c+1]=HG.start[c]+HG.cnt[c];
+  const f=HG.start.slice(0,HG.cnt.length);for(let i=0;i<P.n;i++)if(P.alive[i]){HG.items[f[hcell(P.x[i],P.z[i])]++]=i;}
+}
+function forNear(x,z,r,fn){
+  const i0=clamp(Math.floor((x-r-HG.x0)/HG.cs),0,HG.nx-1),i1=clamp(Math.floor((x+r-HG.x0)/HG.cs),0,HG.nx-1);
+  const j0=clamp(Math.floor((z-r-HG.z0)/HG.cs),0,HG.nz-1),j1=clamp(Math.floor((z+r-HG.z0)/HG.cs),0,HG.nz-1);
+  for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const c=j*HG.nx+i;for(let k=HG.start[c];k<HG.start[c+1];k++)fn(HG.items[k]);}
+}
+function nearestP(x,z,maxd,pref){
+  let best=-1,bd=maxd*maxd;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const dx=P.x[i]-x,dz=P.z[i]-z;let d=dx*dx+dz*dz;if(pref&&P.layer[i])d*=0.55;if(d<bd){bd=d;best=i;}}
+  return best;
+}
+
+/* ---- allowed region ---- */
+function clampOven(i){
+  let x=P.x[i],z=P.z[i];const I=WL.inner;const pl=LAY.plate;
+  const inA=(x>=I.x0+0.02&&x<=I.x1-0.02&&z>=I.z0+0.02&&z<=I.z1-0.01);
+  const inB=(x>=-0.55&&x<=0.55&&z>=0.30&&z<=pl.z);
+  const dp=Math.hypot(x-pl.x,z-pl.z);const inC=dp<=pl.r-0.04;
+  if(inA||inB||inC)return;
+  // project onto each, choose nearest
+  let bx,bz,bd=1e9;
+  const tryP=(px,pz)=>{const d=(px-x)*(px-x)+(pz-z)*(pz-z);if(d<bd){bd=d;bx=px;bz=pz;}};
+  tryP(clamp(x,I.x0+0.02,I.x1-0.02),clamp(z,I.z0+0.02,I.z1-0.01));
+  tryP(clamp(x,-0.55,0.55),clamp(z,0.30,pl.z));
+  if(dp>1e-6)tryP(pl.x+(x-pl.x)/dp*(pl.r-0.04),pl.z+(z-pl.z)/dp*(pl.r-0.04));
+  P.x[i]=bx;P.z[i]=bz;
+}
+function clampPlate(i,allowDog){
+  let x=P.x[i],z=P.z[i];const pl=LAY.plate;const dp=Math.hypot(x-pl.x,z-pl.z);
+  if(dp<=pl.r-0.035)return;
+  if(allowDog){const dz=LAY.dogZone;const dd=Math.hypot(x-dz.x,z-dz.z);if(dd<dz.r)return;
+    // corridor between plate and dog zone
+    const vx=dz.x-pl.x,vz=dz.z-pl.z;const L2=vx*vx+vz*vz;const t=clamp(((x-pl.x)*vx+(z-pl.z)*vz)/L2,0,1);const cx=pl.x+vx*t,cz=pl.z+vz*t;
+    if(Math.hypot(x-cx,z-cz)<0.16)return;}
+  P.x[i]=pl.x+(x-pl.x)/dp*(pl.r-0.035);P.z[i]=pl.z+(z-pl.z)/dp*(pl.r-0.035);
+}
+
+/* ================= dynamics: oven ================= */
+const TIME={t:0,dt:0.016};
+const DRAG={active:false,pid:-1,mode:'',demo:false,anchor:-1,list:[],G0:[0,0],G:[0,0],D:[0,0],Gp:[0,0],t0:0,maxD:0,
+  press:0,pressX:0,pressZ:0,fulcrum:null,tilt:0,overPlate:false,overPlateT:0,ringAtStart:false,rewound:0,rewEdited:0,
+  piece:null,cut:null,snapped:false,rigid:null,startCheese:null,trans:0,fromBoundary:false};
+const INV=new Float32Array(MAXP);
+const EV=[]; // events for audio/fx/director
+function emit(type,data){EV.push({type,data:data||{},t:TIME.t});}
+const DISC={d1:0,d2:0,d3:0,d4a:0,d4:0,d5a:0,d5:0,d6:0,log:[]};
+function achieve(k,info){if(!G.rdone)G.rdone={};G.rdone[k]=1;discover(k,info);}
+function discover(k,info){if(DISC[k])return;DISC[k]=TIME.t||0.001;DISC.log.push({k,t:TIME.t,info:info||''});emit('discover',{k});}
+const BANDS=[]; // baking bands
+let simAwake=1.0;
+
+function computeInv(){
+  const vref=S0*S0*0.866*T_RIM;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;let m=clamp(P.vol[i]/vref,0.3,4);INV[i]=1/m;
+    if(DRAG.active&&P.w[i]>0)INV[i]*=(1-0.85*P.w[i]);}
+}
+function ovenBegin(gx,gz,tolW){
+  buildHash();
+  const a=nearestP(gx,gz,tolW,true);if(a<0)return false;
+  DRAG.anchor=a;DRAG.mode='oven';DRAG.list=[];DRAG.G0=[gx,gz];DRAG.G=[gx,gz];DRAG.Gp=[gx,gz];DRAG.D=[0,0];DRAG.maxD=0;
+  DRAG.press=1;DRAG.pressX=P.x[a];DRAG.pressZ=P.z[a];DRAG.rewound=0;DRAG.rewEdited=0;DRAG.trans=0;
+  DRAG.fromBoundary=Math.hypot(P.x[a]-gx,P.z[a]-gz)>0.02;DRAG.seamBroken=false;DRAG.openedSeam=false;DRAG.fingerMax=0;
+  for(let i=0;i<P.n;i++){P.inD[i]=0;if(!P.alive[i])continue;P.ex[i]=P.x[i];P.ez[i]=P.z[i];P.w[i]=0;}
+  const rb=0.12;const ax=P.x[a],az=P.z[a];
+  const anchorEar=isHardEar(a);
+  const adj=buildAdj();const seen=new Uint8Array(P.n);const q=[a];seen[a]=1;
+  for(let k=0;k<q.length;k++){const i=q[k];const d=Math.hypot(P.x[i]-ax,P.z[i]-az);
+    const w=d<rb*0.42?1:Math.pow(sstep(rb,rb*0.42,d),1.2);
+    P.w[i]=w;P.dg[i]=d;P.gx[i]=P.x[i];P.gz[i]=P.z[i];softP(i);DRAG.list.push(i);
+    for(let s=adj.start[i];s<adj.start[i+1];s++){const j=adj.nb[s];if(seen[j])continue;seen[j]=1;
+      if(P.layer[j]!==P.layer[a]&&ED.type[adj.ne[s]]===1)continue;
+      if(!anchorEar&&isHardEar(j)&&Math.hypot(P.x[j]-ax,P.z[j]-az)>0.035)continue;
+      if(Math.hypot(P.x[j]-ax,P.z[j]-az)<rb)q.push(j);}}
+  P.w[a]=1;
+  DRAG.ringAtStart=RING.has;DRAG.slide0=CH.slide;DRAG.loop=false;
+  if(RING.has&&RING.cells&&RING.cells.length){
+    const C=RING.cells;let dA=1e9;for(let k=0;k<C.length;k+=2)dA=Math.min(dA,Math.hypot(C[k]-ax,C[k+1]-az));
+    if(dA<0.25){ // anchor belongs to the loop: the whole loop follows elastically
+      for(let i=0;i<P.n;i++){if(!P.alive[i]||P.inD[i])continue;let dm=1e9;for(let k=0;k<C.length;k+=2){const d=Math.abs(C[k]-P.x[i])+Math.abs(C[k+1]-P.z[i]);if(d<dm)dm=d;}
+        if(dm<0.09){const dd=Math.hypot(P.x[i]-ax,P.z[i]-az);P.w[i]=0.8*Math.exp(-dd/0.6);P.gx[i]=P.x[i];P.gz[i]=P.z[i];softP(i);DRAG.list.push(i);}}
+      DRAG.loop=true;}else DRAG.loop=false;
+  }
+  DRAG.startCheese=CH.n?Array.from({length:CH.n},(_,k)=>[CH.x[k],CH.z[k]]):[];
+  simAwake=1;
+  emit('press',{x:ax,z:az,thick:P.thick[a],baked:P.bake[a]});
+  return true;
+}
+function isHardEar(i){return P.edited[i]&&P.bake[i]>0.85&&P.hR[i]>0.05&&P.kind[i]===1;}
+function softP(i){P.bakeR[i]=0;if(!P.inD[i]){P.inD[i]=1;}if(P.soft[i])return;P.soft[i]=1;P.wasBaked[i]=P.bake[i]>0.6?1:0;P.kind[i]=0;}
+function hardEarNear(x,z,rmax){
+  let best=-1,bd=rmax;
+  for(let i=0;i<P.n;i++){if(!P.alive[i]||P.soft[i]||!isHardEar(i))continue;
+    const d=Math.hypot(P.x[i]-x,P.z[i]-z);if(d<bd){bd=d;best=i;}}
+  if(best<0)return null;
+  let sx=0,sz=0,c=0;for(let i=0;i<P.n;i++){if(!P.alive[i]||P.soft[i]||P.bake[i]<0.85||P.hR[i]<0.05)continue;if(Math.hypot(P.x[i]-P.x[best],P.z[i]-P.z[best])<0.06){sx+=P.x[i];sz+=P.z[i];c++;}}
+  return {x:sx/c,z:sz/c,i:best,d:bd};
+}
+function ovenDragUpdate(dt){
+  const D=DRAG.D;const dm=Math.hypot(D[0],D[1]);DRAG.maxD=Math.max(DRAG.maxD,dm);
+  if(dm>0.014)DRAG.press=Math.max(0,DRAG.press-dt*6);
+  // pulling a seam opens it
+  if(!DRAG.seamBroken&&dm>0.025){DRAG.seamBroken=true;
+    for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1)continue;const a=ED.a[e],b=ED.b[e];
+      if((P.inD[a]&&P.w[a]>0.05)||(P.inD[b]&&P.w[b]>0.05)){const wk=ED.wk[e];const x=(P.x[a]+P.x[b])/2,z=(P.z[a]+P.z[b])/2;killEdge(e);emit('unweld',{wk,x,z});if(wk===1){DRAG.openedSeam=true;POCKET.opened=true;}
+        if(wk===1&&POCKET.air>0.3)POCKET.vent=TIME.t+1.6;}}}
+  // moved -> soft
+  for(let i=0;i<P.n;i++){if(!P.alive[i]||P.inD[i])continue;
+    if(Math.abs(P.x[i]-P.ex[i])+Math.abs(P.z[i]-P.ez[i])>(isHardEar(i)?0.06:0.013)){softP(i);P.w[i]=0;P.gx[i]=P.x[i];P.gz[i]=P.z[i];DRAG.list.push(i);}}
+  // rewind
+  let rew=0,rewE=0;
+  const rwOK=dm>0.012||TIME.t-DRAG.t0>0.18;
+  if(rwOK)for(const i of DRAG.list){if(!P.alive[i])continue;if(P.toast[i]>0)P.toast[i]=Math.max(0,P.toast[i]-dt*3.2);if(P.bake[i]>0){const d=Math.min(P.bake[i],dt*3.2);P.bake[i]-=d;rew+=d;if(P.edited[i]&&P.wasBaked[i])rewE+=d;}}
+  DRAG.rewound+=rew;DRAG.rewEdited+=rewE;
+  DIAL.vel-=rew*0.9;
+  if(rew>0)SND.rewind(Math.min(1,rew*0.7));
+  if(DRAG.rewEdited>1.5&&P.edited[DRAG.anchor]&&!(G.rdone&&G.rdone.d2===1)){
+    let bakedOther=0;for(let i=0;i<P.n;i++)if(P.alive[i]&&!P.soft[i]&&P.bake[i]>0.9)bakedOther++;
+    if(bakedOther>P.cnt*0.4)achieve('d2','rewind edited band');
+  }
+  if(DRAG.press>0.05)for(const i of DRAG.list){const w=P.w[i];if(w>0)P.glow[i]=Math.max(P.glow[i],0.7*w*DRAG.press);}
+  narrowBand();
+  // fulcrum tilt
+  const f=hardEarNear(P.x[DRAG.anchor]||DRAG.G0[0],P.z[DRAG.anchor]||DRAG.G0[1],0.30);
+  DRAG.fulcrum=f;
+  let tau=0;
+  if(f&&dm>0.02){tau=clamp((dm-0.02)*0.5,0,0.09);}
+  DRAG.tilt=lerp(DRAG.tilt,tau,clamp(dt*10,0,1));
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;let lt=0;
+    if(f&&DRAG.tilt>0.002){const ux=DRAG.G[0]-f.x,uz=DRAG.G[1]-f.z;const ul=Math.hypot(ux,uz)||1;
+      const rx=P.x[i]-f.x,rz=P.z[i]-f.z;const s=(rx*ux+rz*uz)/ul;const r2=rx*rx+rz*rz;
+      const fall=Math.exp(-r2/(0.75*0.75));lt=DRAG.tilt*clamp(-s/0.42+0.15,0,1)*fall*1.8;}
+    P.liftT[i]=lt;}
+  if(f&&DRAG.tilt>0.02&&!(G.rdone&&G.rdone.d3===1)&&!P.edited[DRAG.anchor]){
+    if(CH.slide-DRAG.slide0>0.25)achieve('d3','tilt on ear, cheese slid '+(CH.slide-DRAG.slide0).toFixed(3));
+  }
+  // ring transmission
+  if(DRAG.ringAtStart&&RING.has){let mx=0;const ax=P.ex[DRAG.anchor],az=P.ez[DRAG.anchor];
+    for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(Math.hypot(P.ex[i]-ax,P.ez[i]-az)<0.24)continue;mx=Math.max(mx,Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i]));}
+    DRAG.trans=mx;if(mx>0.045&&G.rdone&&G.rdone.d5a&&G.rdone.d5!==1){achieve('d5','ring transmits '+mx.toFixed(3));emit('ringPull',{});}}
+  // plate proximity
+  const pl=LAY.plate;const tipx=P.x[DRAG.anchor],tipz=P.z[DRAG.anchor];
+  const over=Math.hypot(DRAG.G[0]-pl.x,DRAG.G[1]-pl.z)<pl.r*0.95&&Math.hypot(tipx-pl.x,tipz-pl.z)<pl.r*1.02;
+  if(over&&!DRAG.overPlate)emit('overPlate',{});
+  DRAG.overPlate=over;
+  // stretch sound
+  const a=DRAG.anchor;const st=Math.hypot(P.x[a]-P.gx[a],P.z[a]-P.gz[a]);
+  const spd=Math.hypot(DRAG.G[0]-DRAG.Gp[0],DRAG.G[1]-DRAG.Gp[1])/Math.max(dt,1e-3);
+  SND.stretch(st,P.thick[a]||T_IN,spd);
+  DRAG.Gp[0]=DRAG.G[0];DRAG.Gp[1]=DRAG.G[1];
+}
+function bandWeight(d,dm){const f=sstep(0.07,0.34,dm);const rb=0.12*(1-0.38*f),rp=rb*(0.42-0.2*f);return d<rp?1:Math.pow(sstep(rb,rp,d),1.2);}
+function narrowBand(){
+  const D=DRAG.D;const dm=Math.hypot(D[0],D[1]);if(DRAG.loop)return;
+  for(const i of DRAG.list){if(!P.alive[i]||P.w[i]<=0||i===DRAG.anchor)continue;const nw=Math.min(P.w[i],bandWeight(P.dg[i],dm));
+    if(nw<P.w[i]-1e-4){P.gx[i]+=D[0]*(P.w[i]-nw);P.gz[i]+=D[1]*(P.w[i]-nw);P.w[i]=nw;}}
+}
+function applyGrab(k){
+  const D=DRAG.D;
+  for(const i of DRAG.list){const w=P.w[i];if(w<=0||!P.alive[i])continue;
+    const tx=P.gx[i]+D[0]*w,tz=P.gz[i]+D[1]*w;const a=Math.min(1,w*1.3)*k;
+    P.x[i]+=(tx-P.x[i])*a;P.z[i]+=(tz-P.z[i])*a;}
+}
+function solveEdges(){
+  const x=P.x,z=P.z,bk=P.bake;
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;
+    const a=ED.a[e],b=ED.b[e];const dx=x[b]-x[a],dz=z[b]-z[a];const L=Math.sqrt(dx*dx+dz*dz);if(L<1e-7)continue;
+    const rest=ED.rest[e];const C=L-rest;const bb=(bk[a]+bk[b])*0.5;const b2=bb*bb;
+    let k;if(ED.type[e]===1)k=0.6;else if(C>0)k=0.28+0.66*b2;else k=0.05+0.87*b2;
+    const wa=INV[a],wb=INV[b];const ws=wa+wb;if(ws<=0)continue;
+    const s=k*C/(L*ws);x[a]+=dx*s*wa;z[a]+=dz*s*wa;x[b]-=dx*s*wb;z[b]-=dz*s*wb;}
+}
+function plastic(){
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;const a=ED.a[e],b=ED.b[e];
+    const raw=1-(P.bake[a]+P.bake[b])*0.5;if(raw<0.04)continue;
+    const L=Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a]);let r=ED.rest[e];
+    if(L>r*1.07)r+=(L-r*1.07)*0.55*raw;else if(L<r*0.86)r-=(r*0.86-L)*0.45*raw;
+    ED.rest[e]=Math.max(r,0.3*S0);}
+}
+function simOven(dt){
+  const n=P.n;const drag=DRAG.active&&DRAG.mode==='oven';
+  computeInv();
+  const sub=2;
+  for(let s=0;s<sub;s++){
+    for(let i=0;i<n;i++){if(!P.alive[i])continue;const raw=1-P.bake[i];const damp=0.28+0.34*raw;
+      const vx=(P.x[i]-P.px[i])*damp,vz=(P.z[i]-P.pz[i])*damp;P.px[i]=P.x[i];P.pz[i]=P.z[i];P.x[i]+=vx;P.z[i]+=vz;}
+    if(drag)applyGrab(0.7);
+    const ITS=PERF.sim>3?5:7;
+    for(let it=0;it<ITS;it++){solveEdges();if(drag&&(it&1))applyGrab(0.3);}
+    for(let i=0;i<n;i++){if(!P.alive[i])continue;
+      if(!P.soft[i]&&P.bake[i]>0.7){const dx=P.x[i]-P.px[i],dz=P.z[i]-P.pz[i];const d=Math.hypot(dx,dz);const he=isHardEar(i);
+        if(d<(he?0.0016:0.0006)){P.x[i]=P.px[i];P.z[i]=P.pz[i];}else{const k=he?0.3:0.6;P.x[i]=P.px[i]+dx*k;P.z[i]=P.pz[i]+dz*k;}}
+      clampOven(i);}
+    plastic();
+  }
+  // weld breaking
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1)continue;const a=ED.a[e],b=ED.b[e];
+    const L=Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a]);const r=L/ED.rest[e];const raw=Math.min(P.bake[a],P.bake[b])<0.5;
+    if((raw&&r>2.3)||r>4.0){const wk=ED.wk[e];killEdge(e);emit('unweld',{wk,x:(P.x[a]+P.x[b])/2,z:(P.z[a]+P.z[b])/2});if(wk===1&&POCKET.air>0.3)POCKET.vent=TIME.t+1.6;}}
+  // splits / tears
+  let sp=0;
+  const splitTh=1.6*S0*(1+2.2*sstep(700,1000,P.cnt));const noSplit=P.cnt>=1000;
+  for(let e=0;e<ED.n&&sp<26;e++){if(!ED.alive[e]||ED.type[e])continue;if(ED.rest[e]<=splitTh)continue;
+    const a=ED.a[e],b=ED.b[e];
+    if(P.thick[a]<0.0052&&P.thick[b]<0.0052&&(P.soft[a]||P.soft[b])){tearEdge(e);sp++;}
+    else if(!noSplit&&splitEdge(e))sp++;else if(noSplit)continue;else break;}
+  if(sp)computeDerived();
+  weldLayerPass(dt);
+  // motion amount
+  let mv=0;for(let i=0;i<n;i++){if(!P.alive[i])continue;mv=Math.max(mv,Math.abs(P.x[i]-P.fx[i])+Math.abs(P.z[i]-P.fz[i]));}
+  return mv;
+}
+function tearEdge(e){const t0=ED.t0[e],t1=ED.t1[e];const x=(P.x[ED.a[e]]+P.x[ED.b[e]])/2,z=(P.z[ED.a[e]]+P.z[ED.b[e]])/2;
+  if(t0>=0)killTri(t0);if(t1>=0)killTri(t1);if(ED.alive[e])killEdge(e);emit('tear',{x,z});}
+
+let weldsThisSec=0;
+function weldLayerPass(dt){
+  buildHash();
+  const r=0.86*S0,md0=2.4*S0;let made=0;
+  for(let i=0;i<P.n;i++){
+    if(!P.alive[i])continue;
+    if(P.layer[i]===1&&!(DRAG.active&&P.w[i]>0.02)){
+      let cov=false;forNear(P.x[i],P.z[i],1.1*S0,(j)=>{if(cov||j===i||P.layer[j])return;if(Math.hypot(P.mu[i]-P.mu[j],P.mv[i]-P.mv[j])<md0)return;if(Math.hypot(P.x[i]-P.x[j],P.z[i]-P.z[j])<1.1*S0)cov=true;});
+      if(!cov){P.layerT[i]+=dt;if(P.layerT[i]>0.25)P.layer[i]=0;}else P.layerT[i]=0;}
+    if(!P.soft[i]||P.bake[i]>0.5)continue;
+    forNear(P.x[i],P.z[i],r,(j)=>{
+      if(j===i||!P.alive[j])return;
+      const d=Math.hypot(P.x[i]-P.x[j],P.z[i]-P.z[j]);if(d>r)return;
+      if(Math.hypot(P.mu[i]-P.mu[j],P.mv[i]-P.mv[j])<md0)return;
+      if(DRAG.active&&P.w[i]>0.03&&P.layer[i]===0&&P.layer[j]===0&&P.w[j]<P.w[i]*0.5&&!P.bnd[j]){P.layer[i]=1;P.layerT[i]=0;}
+    });
+  }
+}
+
+function countJoins(){let c=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&ED.type[e]===1&&ED.wk[e]===2)c++;return c;}
+function makeWelds(list){
+  buildHash();
+  const r=0.66*S0,md0=2.4*S0;let made=0;const madeAt=[];
+  const order=list.slice().sort((u,v)=>(P.w[v]||0)-(P.w[u]||0));
+  for(const i of order){
+    if(!P.alive[i]||P.bake[i]>0.5||P.welds[i]>=1)continue;
+    if(madeAt.some(m=>Math.abs(m[0]-P.x[i])+Math.abs(m[1]-P.z[i])<0.034))continue;
+    const ri=P.w[i]>0.5?0.058:r;
+    let best=-1,bd=ri;
+    forNear(P.x[i],P.z[i],ri,(j)=>{
+      if(ri>r&&P.inD[j])return;
+      if(j===i||!P.alive[j]||P.welds[j]>=2)return;
+      const d=Math.hypot(P.x[i]-P.x[j],P.z[i]-P.z[j]);if(d>=bd)return;
+      if(Math.hypot(P.mu[i]-P.mu[j],P.mv[i]-P.mv[j])<md0)return;
+      if(EMAP.has(ekey(i,j)))return;
+      if(P.inD[j]&&P.layer[j]===P.layer[i]&&Math.hypot(P.x[j]-P.ex[j],P.z[j]-P.ez[j])<0.02&&Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i])<0.02)return;
+      if(cheeseAt((P.x[i]+P.x[j])/2,(P.z[i]+P.z[j])/2)>0.22)return;
+      if(TIME.t<POCKET.vent&&P.layer[i]!==P.layer[j])return;
+      bd=d;best=j;});
+    if(best<0)continue;
+    const j=best;
+    if(bd>0.62*S0){const k=(bd-0.55*S0)/bd*0.5;const dx=P.x[j]-P.x[i],dz=P.z[j]-P.z[i];P.x[i]+=dx*k;P.z[i]+=dz*k;P.px[i]=P.x[i];P.pz[i]=P.z[i];if(P.bake[j]<0.5){P.x[j]-=dx*k*0.5;P.z[j]-=dz*k*0.5;}bd=Math.hypot(P.x[j]-P.x[i],P.z[j]-P.z[i]);}
+    const e=addEdge(i,j,1,-1);if(e<0)continue;
+    ED.rest[e]=Math.max(bd,0.5*S0);ED.wk[e]=(P.layer[i]!==P.layer[j]&&!(P.bnd[i]&&P.bnd[j]))?1:2;if(ED.wk[e]===1&&TIME.t>POCKET.vent)POCKET.opened=false;P.welds[i]++;P.welds[j]++;made++;
+    const cx=(P.x[i]+P.x[j])/2,cz=(P.z[i]+P.z[j])/2;madeAt.push([P.x[i],P.z[i]]);P.glow[i]=1.6;P.glow[j]=1.6;GF.forceFrames=Math.max(GF.forceFrames||0,30);
+    if(made<=3||made%3===0)emit('weld',{wk:ED.wk[e],x:cx,z:cz});
+    RING.checkAt=TIME.t+0.35;
+    if(made>=16)break;
+  }
+  return made;
+}
+/* ---- bake management ---- */
+function releaseOven(serve){
+  if(DRAG.openedSeam)POCKET.vent=Math.max(POCKET.vent,TIME.t+2.5);
+  const band={list:[],t:TIME.t,cx:0,cz:0,moved:0,thick:0,rewE:DRAG.rewEdited,done:false};
+  let sx=0,sz=0,c=0,mt=0,mc=0;
+  const tap=(DRAG.fingerMax||0)<pxToWorld(10);
+  for(const i of DRAG.list){if(!P.alive[i]||!P.soft[i])continue;band.list.push(i);sx+=P.x[i];sz+=P.z[i];c++;
+    const mvd=Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i]);if(mvd>0.03){mt+=P.thick[i];mc++;}
+    P.bakeR[i]=Math.max(0.8,1/(0.5+16*P.thick[i]))*(serve?3:1);P.edited[i]=1;
+    {const px=tap?P.x[DRAG.anchor]:DRAG.pressX,pz=tap?P.z[DRAG.anchor]:DRAG.pressZ;const d=Math.hypot(P.x[i]-px,P.z[i]-pz);const rr=0.058;if(d<rr)P.toast[i]=Math.min(1,P.toast[i]+(tap?0.95:0.45)*(1-d/rr));}
+    P.liftV[i]+=0.25*P.w[i];}
+  if(c){band.cx=sx/c;band.cz=sz/c;}band.moved=mc;band.thick=mc?mt/mc:0;
+  // spring back bounce
+  for(const i of band.list){P.liftV[i]+=0.35*(1-P.bake[i]);}
+  BANDS.push(band);
+  if(!serve){let any=false;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.z[i]>0.6||(P.z[i]>0.43&&Math.abs(P.x[i])>0.55)){any=true;break;}}if(any)G.retract=0.6;}
+  const joinsBefore=countJoins();
+  makeWelds(band.list);
+  if(countJoins()>joinsBefore){ // a join: keep the loop shape (no spring-back)
+    for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;const a=ED.a[e],b=ED.b[e];if(P.inD[a]||P.inD[b])ED.rest[e]=Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a]);}
+    for(const i of band.list){P.px[i]=P.x[i];P.pz[i]=P.z[i];}
+  }
+  for(const i of band.list)P.w[i]=0;
+  for(let i=0;i<P.n;i++)P.liftT[i]=0;
+  DRAG.tilt=0;
+  emit('release',{stretch:DRAG.maxD,tap,x:band.cx,z:band.cz});
+  simAwake=1;
+}
+function bakeUpdate(dt){
+  let baking=0;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+    if(P.bakeR[i]>0){
+      P.bake[i]=Math.min(1,P.bake[i]+P.bakeR[i]*dt);baking++;if(P.bake[i]>=1){P.bakeR[i]=0;P.soft[i]=0;P.spring[i]=1.6;}}
+    if(P.spring[i]>0)P.spring[i]-=dt;}
+  for(const b of BANDS){if(b.done)continue;let all=true;for(const i of b.list){if(P.alive[i]&&P.bake[i]<1&&P.soft[i]){all=false;break;}}
+    if(all){b.done=true;classifyBand(b);emit('baked',{x:b.cx,z:b.cz,kind:b.kind});}}
+  while(BANDS.length&&BANDS[0].done)BANDS.shift();
+  return baking;
+}
+function classifyBand(b){
+  let kind=0;
+  if(b.moved>=3){kind=b.thick>0.0225?1:2;}
+  b.kind=kind;
+  if(kind){for(const i of b.list){if(!P.alive[i])continue;if(Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i])>0.02)P.kind[i]=kind;}}
+  // d1: ear & wing coexist
+  let e=0,w=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.kind[i]===1)e++;else if(P.kind[i]===2)w++;}
+  if(e>=3&&w>=3)achieve('d1','ear '+e+' wing '+w);
+  if(kind===1&&G.rdone)G.rdone.ear=1;if(kind===2&&G.rdone)G.rdone.wing=1;
+}
+
+/* ---- pocket (袋) ---- */
+const POCKET={has:false,air:0,maxAir:0,sealed:false,cx:0,cz:0,cnt:0,inflated:false,checkT:0,vent:0,opened:false};
+function pocketUpdate(dt){
+  let c=0,sx=0,sz=0;
+  for(let i=0;i<P.n;i++){if(!P.alive[i]||!P.layer[i])continue;const ch=cheeseAt(P.x[i],P.z[i]);if(ch>0.18){c++;sx+=P.x[i];sz+=P.z[i];P.seam[i]=-1;}else P.seam[i]=0;}
+  let seams=0;
+  if(c){const cx=sx/c,cz=sz/c;POCKET.cx=cx;POCKET.cz=cz;
+    for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1||ED.wk[e]!==1)continue;const a=ED.a[e];if(Math.hypot(P.x[a]-cx,P.z[a]-cz)<0.34)seams++;}}
+  POCKET.cnt=c;POCKET.sealed=c>=3&&seams>=3&&TIME.t>POCKET.vent&&!POCKET.opened;
+  let tot=0,mx=0;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+    if(P.seam[i]===-1){if(POCKET.sealed&&P.bake[i]>0.3&&(P.bakeR[i]>0||P.spring[i]>0))P.air[i]=Math.min(1,P.air[i]+dt*1.4*P.bake[i]);else if(POCKET.sealed&&!P.soft[i]&&P.air[i]>0.02)P.air[i]=P.air[i];else P.air[i]=Math.max(0,P.air[i]-dt*(POCKET.sealed?1.2:3.0));}
+    else if(P.air[i]>0)P.air[i]=Math.max(0,P.air[i]-dt*3.0);
+    tot+=P.air[i];mx=Math.max(mx,P.air[i]);}
+  const prev=POCKET.air;POCKET.air=mx;
+  if(mx>0.55&&!POCKET.inflated){POCKET.inflated=true;emit('puff',{x:POCKET.cx,z:POCKET.cz});achieve('d4a','pocket inflated');}
+  if(POCKET.inflated&&mx<0.15){POCKET.inflated=false;emit('deflate',{x:POCKET.cx,z:POCKET.cz});if(G.rdone&&G.rdone.d4a)achieve('d4','pocket opened');}
+  POCKET.has=c>0;
+  return tot>0.01||prev>0.01;
+}
+
+/* ---- ring / hole detection ---- */
+const RING={has:false,checkAt:0,cx:0,cz:0,area:0,lastCheck:0,expand:0,ex:0,ez:0};
+
+/* ================= dough heightfield ================= */
+const GF={};
+function initFieldArrays(){
+  const g=WL.grid;GF.cs=g.cell;GF.x0=g.x0;GF.z0=g.z0;
+  GF.nx=Math.ceil((g.x1-g.x0)/g.cell)+1;GF.nz=Math.ceil((g.z1-g.z0)/g.cell)+1;
+  const N=GF.nx*GF.nz;GF.N=N;
+  const F=()=>new Float32Array(N);
+  GF.c0=F();GF.w0=F();GF.h0=F();GF.bk0=F();GF.cr0=F();GF.ts0=F();GF.lf0=F();GF.pf0=F();GF.gl0=F();GF.ck0=F();GF.sm0=F();
+  GF.c1=F();GF.w1=F();GF.h1=F();GF.bk1=F();GF.cr1=F();GF.ts1=F();GF.lf1=F();GF.pf1=F();GF.ar1=F();GF.gl1=F();
+  GF.ch=F();GF.wr0=F();GF.wr1=F();GF.sup=F();GF.rowHas=new Uint8Array(GF.nz+4);GF.y=F();GF.ySurf=F();GF.vis=F();GF.tmp=F();
+  GF.listA=['c0','w0','h0','bk0','cr0','ts0','lf0','pf0','gl0','ck0','sm0','c1','w1','h1','bk1','cr1','ts1','lf1','pf1','ar1','gl1','ch'];
+  GF.dynF=new Float32Array(N*3);GF.dynB=new Uint8Array(N*16);
+  GF.idx=new Uint16Array((GF.nx-1)*(GF.nz-1)*6);GF.idxCount=0;
+  GF.rect=null;GF.prevRect=null;
+  computeSupportGrid();
+}
+function computeSupportGrid(){for(let j=0;j<GF.nz;j++)for(let i=0;i<GF.nx;i++){GF.sup[j*GF.nx+i]=supportY(GF.x0+i*GF.cs,GF.z0+j*GF.cs);}}
+function initFieldGL(){
+  const nx=GF.nx,nz=GF.nz;const st=new Float32Array(nx*nz*2);
+  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){st[(j*nx+i)*2]=GF.x0+i*GF.cs;st[(j*nx+i)*2+1]=GF.z0+j*GF.cs;}
+  GF.vbS=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbS);gl.bufferData(gl.ARRAY_BUFFER,st,gl.STATIC_DRAW);
+  GF.vbF=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbF);gl.bufferData(gl.ARRAY_BUFFER,GF.dynF,gl.DYNAMIC_DRAW);
+  GF.vbB=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbB);gl.bufferData(gl.ARRAY_BUFFER,GF.dynB,gl.DYNAMIC_DRAW);
+  GF.ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,GF.ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,GF.idx.byteLength,gl.DYNAMIC_DRAW);
+  GF.uploadAll=true;
+}
+// per-particle render attributes
+const PA={h:new Float32Array(MAXP),bk:new Float32Array(MAXP),cr:new Float32Array(MAXP),ts:new Float32Array(MAXP),lf:new Float32Array(MAXP),
+  pf:new Float32Array(MAXP),gl:new Float32Array(MAXP),ck:new Float32Array(MAXP),ar:new Float32Array(MAXP),sm:new Float32Array(MAXP),rx:new Float32Array(MAXP),rz:new Float32Array(MAXP)};
+function particleAttrs(){
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+    PA.rx[i]=P.x[i]+P.bendX[i];PA.rz[i]=P.z[i]+P.bendZ[i];
+    PA.h[i]=P.hR[i];PA.bk[i]=P.bake[i];PA.cr[i]=crispOf(i);PA.ts[i]=P.toast[i];
+    PA.lf[i]=P.lift[i]+P.sag[i];PA.pf[i]=puffOf(i);PA.gl[i]=P.glow[i];PA.ck[i]=P.crack[i];PA.ar[i]=P.air[i];PA.sm[i]=P.welds[i]?0.6:0;}
+}
+function rasterTri(a,b,c,L){
+  const cs=GF.cs,x0=GF.x0,z0=GF.z0,nx=GF.nx,nz=GF.nz;
+  const ax=(PA.rx[a]-x0)/cs,az=(PA.rz[a]-z0)/cs,bx=(PA.rx[b]-x0)/cs,bz=(PA.rz[b]-z0)/cs,cx=(PA.rx[c]-x0)/cs,cz=(PA.rz[c]-z0)/cs;
+  const ar2=(bx-ax)*(cz-az)-(cx-ax)*(bz-az);if(Math.abs(ar2)<1e-5)return;
+  const lab=Math.hypot(bx-ax,bz-az),lbc=Math.hypot(cx-bx,cz-bz),lca=Math.hypot(ax-cx,az-cz);
+  const A=Math.abs(ar2);
+  const tA=0.62*lbc/A,tB=0.62*lca/A,tC=0.62*lab/A; // barycentric tolerance (~0.62 cell)
+  const CLP=GF.clip;
+  const i0=Math.max(CLP.i0,Math.floor(Math.min(ax,bx,cx)-1)),i1=Math.min(CLP.i1,Math.ceil(Math.max(ax,bx,cx)+1));
+  const j0=Math.max(CLP.j0,Math.floor(Math.min(az,bz,cz)-1)),j1=Math.min(CLP.j1,Math.ceil(Math.max(az,bz,cz)+1));
+  if(i0>i1||j0>j1)return;
+  const inv=1/ar2;
+  const C=L?GF.c1:GF.c0,Wt=L?GF.w1:GF.w0,H=L?GF.h1:GF.h0,BK=L?GF.bk1:GF.bk0,CR=L?GF.cr1:GF.cr0,TS=L?GF.ts1:GF.ts0,LF=L?GF.lf1:GF.lf0,PF=L?GF.pf1:GF.pf0,GLW=L?GF.gl1:GF.gl0;
+  const X=L?GF.ar1:GF.ck0;const XA=L?PA.ar:PA.ck;
+  for(let j=j0;j<=j1;j++){for(let i=i0;i<=i1;i++){
+    let wa=((bx-i)*(cz-j)-(cx-i)*(bz-j))*inv,wb=((cx-i)*(az-j)-(ax-i)*(cz-j))*inv,wc=1-wa-wb;
+    const cov=Math.min(1+wa/tA,1+wb/tB,1+wc/tC,1);if(cov<=0)continue;
+    if(wa<0)wa=0;if(wb<0)wb=0;if(wc<0)wc=0;const s=wa+wb+wc;wa/=s;wb/=s;wc/=s;
+    const k=j*nx+i;
+    if(cov>C[k])C[k]=cov;Wt[k]+=cov;
+    H[k]+=(PA.h[a]*wa+PA.h[b]*wb+PA.h[c]*wc)*cov;
+    BK[k]+=(PA.bk[a]*wa+PA.bk[b]*wb+PA.bk[c]*wc)*cov;
+    CR[k]+=(PA.cr[a]*wa+PA.cr[b]*wb+PA.cr[c]*wc)*cov;
+    TS[k]+=(PA.ts[a]*wa+PA.ts[b]*wb+PA.ts[c]*wc)*cov;
+    LF[k]+=(PA.lf[a]*wa+PA.lf[b]*wb+PA.lf[c]*wc)*cov;
+    PF[k]+=(PA.pf[a]*wa+PA.pf[b]*wb+PA.pf[c]*wc)*cov;
+    GLW[k]+=(PA.gl[a]*wa+PA.gl[b]*wb+PA.gl[c]*wc)*cov;
+    X[k]+=(XA[a]*wa+XA[b]*wb+XA[c]*wc)*cov;
+    if(!L)GF.sm0[k]+=(PA.sm[a]*wa+PA.sm[b]*wb+PA.sm[c]*wc)*cov;
+  }}
+}
+function rasterCapsule(a,b,L){ // weld bridge
+  const cs=GF.cs;const x0=GF.x0,z0=GF.z0,nx=GF.nx,nz=GF.nz;
+  const ax=(PA.rx[a]-x0)/cs,az=(PA.rz[a]-z0)/cs,bx=(PA.rx[b]-x0)/cs,bz=(PA.rz[b]-z0)/cs;const r=0.55*S0/cs;
+  const CLP=GF.clip;
+  const i0=Math.max(CLP.i0,Math.floor(Math.min(ax,bx)-r-1)),i1=Math.min(CLP.i1,Math.ceil(Math.max(ax,bx)+r+1));
+  const j0=Math.max(CLP.j0,Math.floor(Math.min(az,bz)-r-1)),j1=Math.min(CLP.j1,Math.ceil(Math.max(az,bz)+r+1));
+  if(i0>i1||j0>j1)return;
+  const vx=bx-ax,vz=bz-az;const l2=vx*vx+vz*vz||1e-6;
+  const C=L?GF.c1:GF.c0,Wt=L?GF.w1:GF.w0,H=L?GF.h1:GF.h0,BK=L?GF.bk1:GF.bk0,CR=L?GF.cr1:GF.cr0,TS=L?GF.ts1:GF.ts0,LF=L?GF.lf1:GF.lf0,PF=L?GF.pf1:GF.pf0;
+  for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){
+    const t=clamp(((i-ax)*vx+(j-az)*vz)/l2,0,1);const d=Math.hypot(i-ax-vx*t,j-az-vz*t);const cov=clamp(r-d+0.5,0,1);if(cov<=0)continue;
+    const k=j*nx+i;const u=1-t;
+    if(cov>C[k])C[k]=cov;Wt[k]+=cov*0.7;const c2=cov*0.7;
+    H[k]+=(PA.h[a]*u+PA.h[b]*t)*c2*0.85;BK[k]+=(PA.bk[a]*u+PA.bk[b]*t)*c2;CR[k]+=(PA.cr[a]*u+PA.cr[b]*t)*c2;
+    TS[k]+=(PA.ts[a]*u+PA.ts[b]*t)*c2;LF[k]+=(PA.lf[a]*u+PA.lf[b]*t)*c2;PF[k]+=(PA.pf[a]*u+PA.pf[b]*t)*c2;
+    if(!L)GF.sm0[k]+=c2;
+  }
+}
+function blurRect(arr,r){
+  const nx=GF.nx,tmp=GF.tmp;const {i0,i1,j0,j1}=r;const RH=GF.rowHas;
+  for(let j=j0;j<=j1;j++){const o=j*nx;if(!RH[j]){tmp.fill(0,o+i0,o+i1+1);continue;}for(let i=i0;i<=i1;i++){
+    const a=i>1?arr[o+i-2]:0,b=i>0?arr[o+i-1]:0,c=arr[o+i],d=i<nx-1?arr[o+i+1]:0,e=i<nx-2?arr[o+i+2]:0;tmp[o+i]=(a+e+4*(b+d)+6*c)*0.0625;}}
+  for(let j=j0;j<=j1;j++){const o=j*nx;if(!(RH[j]||RH[j-1]||RH[j+1]||RH[j-2]||RH[j+2])){arr.fill(0,o+i0,o+i1+1);continue;}for(let i=i0;i<=i1;i++){
+    const a=j>1?tmp[o+i-2*nx]:0,b=j>0?tmp[o+i-nx]:0,c=tmp[o+i],d=j<GF.nz-1?tmp[o+i+nx]:0,e=j<GF.nz-2?tmp[o+i+2*nx]:0;arr[o+i]=(a+e+4*(b+d)+6*c)*0.0625;}}
+}
+function pBBox(){
+  let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9,any=false;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;any=true;const x=PA.rx[i],z=PA.rz[i];if(x<x0)x0=x;if(x>x1)x1=x;if(z<z0)z0=z;if(z>z1)z1=z;}
+  for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;any=true;x0=Math.min(x0,CH.x[k]);x1=Math.max(x1,CH.x[k]);z0=Math.min(z0,CH.z[k]);z1=Math.max(z1,CH.z[k]);}
+  if(!any)return null;
+  const m=0.09;const cs=GF.cs;
+  return {i0:clamp(Math.floor((x0-m-GF.x0)/cs),0,GF.nx-1),i1:clamp(Math.ceil((x1+m-GF.x0)/cs),0,GF.nx-1),
+          j0:clamp(Math.floor((z0-m-GF.z0)/cs),0,GF.nz-1),j1:clamp(Math.ceil((z1+m-GF.z0)/cs),0,GF.nz-1)};
+}
+function unionRect(a,b){if(!a)return b;if(!b)return a;return {i0:Math.min(a.i0,b.i0),i1:Math.max(a.i1,b.i1),j0:Math.min(a.j0,b.j0),j1:Math.max(a.j1,b.j1)};}
+const DENT={amt:0,x:0,z:0};
+const LSH={dx:0,dz:0,slope:1};
+function initLSH(){const d=LIGHT.dir;const h=Math.hypot(d[0],d[2])||1;LSH.dx=d[0]/h;LSH.dz=d[2]/h;LSH.slope=d[1]/h;}
+function inviteRect(){const a=G.invite.i;const ax=P.x[a],az=P.z[a];const cs=GF.cs;const m=0.16;
+  return {i0:clamp(Math.floor((ax-m-GF.x0)/cs),0,GF.nx-1),i1:clamp(Math.ceil((ax+m-GF.x0)/cs),0,GF.nx-1),j0:clamp(Math.floor((az-m-GF.z0)/cs),0,GF.nz-1),j1:clamp(Math.ceil((az+m-GF.z0)/cs),0,GF.nz-1)};}
+function expandRect(r,m){return {i0:Math.max(0,r.i0-m),i1:Math.min(GF.nx-1,r.i1+m),j0:Math.max(0,r.j0-m),j1:Math.min(GF.nz-1,r.j1+m)};}
+const BLUR_LIST=['c0','w0','h0','bk0','lf0','c1','w1','h1','bk1','lf1','ar1','ch'];
+function updateField(part){
+  particleAttrs();
+  let r,rc;
+  if(part){rc=part;r=expandRect(part,3);}
+  else{const cur=pBBox();r=unionRect(cur,GF.prevRect);GF.prevRect=cur;
+    if(!r){GF.rect=null;GF.idxRect=null;if(GF.hadAny){GF.hadAny=false;clearAllField();}return;}
+    rc=r;GF.idxRect=r;}
+  GF.hadAny=true;GF.clip=r;
+  const nx=GF.nx;
+  for(const nm of GF.listA){const a=GF[nm];for(let j=r.j0;j<=r.j1;j++)a.fill(0,j*nx+r.i0,j*nx+r.i1+1);}
+  const cs=GF.cs,X0=GF.x0,Z0=GF.z0;const xa=X0+(r.i0-2)*cs,xb=X0+(r.i1+2)*cs,za=Z0+(r.j0-2)*cs,zb=Z0+(r.j1+2)*cs;
+  for(let t=0;t<TR.n;t++){if(!TR.alive[t])continue;const a=TR.a[t],b=TR.b[t],c=TR.c[t];
+    if(part){const mxx=Math.max(PA.rx[a],PA.rx[b],PA.rx[c]),mnx=Math.min(PA.rx[a],PA.rx[b],PA.rx[c]),mxz=Math.max(PA.rz[a],PA.rz[b],PA.rz[c]),mnz=Math.min(PA.rz[a],PA.rz[b],PA.rz[c]);
+      if(mxx<xa||mnx>xb||mxz<za||mnz>zb)continue;}
+    const L=(P.layer[a]+P.layer[b]+P.layer[c])>=2?1:0;rasterTri(a,b,c,L);}
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1)continue;const a=ED.a[e],b=ED.b[e];rasterCapsule(a,b,(P.layer[a]&&P.layer[b])?1:0);}
+  splatCheese(r);
+  for(let j=r.j0;j<=r.j1;j++){const o=j*nx;let h=0;for(let i=r.i0;i<=r.i1;i++){const a=GF.w0[o+i],b=GF.w1[o+i];GF.wr0[o+i]=a;GF.wr1[o+i]=b;if(a>0||b>0||GF.ch[o+i]>0)h=1;}GF.rowHas[j]=h;}
+  // rows just outside the rect may hold stale blurred data; treat them as non-empty for safety
+  if(r.j0>0)GF.rowHas[r.j0-1]=1;if(r.j1<GF.nz-1)GF.rowHas[r.j1+1]=1;
+  for(const nm of BLUR_LIST)blurRect(GF[nm],r);
+  composeField(rc);
+  GF.rect=rc;GF.partial=!!part;
+}
+function clearAllField(){for(const nm of GF.listA)GF[nm].fill(0);GF.vis.fill(0);GF.dynB.fill(0);GF.uploadAll=true;GF.idxCount=0;}
+const prof=(c)=>Math.sqrt(clamp((c-0.08)/0.86,0,1));
+function composeField(r){
+  const nx=GF.nx,cs=GF.cs;const F=GF.dynF,B=GF.dynB;
+  const dx=DENT.x,dz=DENT.z,da=DENT.amt;
+  for(let j=r.j0;j<=r.j1;j++)for(let i=r.i0;i<=r.i1;i++){
+    const k=j*nx+i;
+    const c0=GF.c0[k],c1=GF.c1[k];
+    if(c0<0.004&&c1<0.004){GF.y[k]=GF.sup[k];GF.ySurf[k]=GF.sup[k];GF.vis[k]=0;const o=k*16;B[o]=255;B[o+1]=0;B[o+2]=0;B[o+3]=0;B[o+4]=0;B[o+5]=0;B[o+6]=0;B[o+8]=0;B[o+9]=0;B[o+10]=0;B[o+11]=0;continue;}
+    const w0=GF.w0[k]+1e-6,w1=GF.w1[k]+1e-6;
+    const h0=c0>0.01?GF.h0[k]/w0*prof(c0):0;const h1=c1>0.01?GF.h1[k]/w1*prof(c1):0;
+    const ww=GF.w0[k]+GF.w1[k]+1e-6;
+    const lift=(GF.lf0[k]+GF.lf1[k])/ww;
+    const m1=sstep(0.3,0.68,c1);
+    const chRaw=GF.ch[k];const ch=chRaw*(c0>0.2||c1>0.2?1:0);
+    const chH=0.0075*ch/(1+0.45*ch);
+    const air=c1>0.01?GF.ar1[k]/w1:0;
+    let y=GF.sup[k]+lift+h0;
+    GF.ySurf[k]=y;
+    y+=chH*(1-m1*0.25)+air*0.075*c1;
+    y+=h1;
+    if(da>0){const x=GF.x0+i*cs,z=GF.z0+j*cs;const d2=((x-dx)*(x-dx)+(z-dz)*(z-dz))/(0.042*0.042);if(d2<9)y-=da*(0.022*Math.exp(-d2)-0.005*Math.exp(-(d2-2.2)*(d2-2.2)));}
+    const vis=Math.max(c0,c1);
+    GF.y[k]=y;GF.vis[k]=vis;
+    const bk=c0>0.01||c1>0.01?lerp(GF.bk0[k]/w0,GF.bk1[k]/w1,m1):1;
+    const r0=GF.wr0[k]>1e-4?1/GF.wr0[k]:0,r1=GF.wr1[k]>1e-4?1/GF.wr1[k]:0;
+    const cr=lerp(GF.cr0[k]*r0,GF.cr1[k]*r1,m1);const ts=lerp(GF.ts0[k]*r0,GF.ts1[k]*r1,m1);
+    const pf=lerp(GF.pf0[k]*r0,GF.pf1[k]*r1,m1);const glw=Math.max(GF.gl0[k]*r0,c1>0.05?GF.gl1[k]*r1:0);
+    const ck=GF.ck0[k]*r0;const sm=GF.sm0[k]*r0;
+    const chv=ch*(1-m1);
+    const o=k*16;
+    B[o]=clamp(bk*255,0,255);B[o+1]=clamp(cr*255,0,255);B[o+2]=clamp(ts*255,0,255);B[o+3]=clamp(chv*170,0,255);
+    B[o+4]=clamp(vis*255,0,255);B[o+5]=clamp(air*m1*255,0,255);B[o+6]=clamp(glw*255,0,255);
+    B[o+8]=clamp(m1*255,0,255);B[o+9]=clamp(ck*255,0,255);B[o+10]=clamp(pf*255,0,255);B[o+11]=clamp(sm*255,0,255);
+  }
+  // normals + ao
+  const i0=Math.max(1,r.i0),i1=Math.min(GF.nx-2,r.i1),j0=Math.max(1,r.j0),j1=Math.min(GF.nz-2,r.j1);
+  const Y=GF.y;
+  for(let j=r.j0;j<=r.j1;j++)for(let i=r.i0;i<=r.i1;i++){
+    const k=j*nx+i;const o=k*3;
+    if(i<1||j<1||i>GF.nx-2||j>GF.nz-2||(GF.vis[k]<0.01&&GF.vis[k+1]<0.01&&GF.vis[k-1]<0.01&&GF.vis[k+nx]<0.01&&GF.vis[k-nx]<0.01)){F[o]=Y[k];F[o+1]=0;F[o+2]=0;GF.dynB[k*16+7]=255;GF.dynB[k*16+12]=255;continue;}
+    const gx=(Y[k+1]-Y[k-1])/(2*cs),gz=(Y[k+nx]-Y[k-nx])/(2*cs);
+    const l=Math.sqrt(gx*gx+1+gz*gz);F[o]=Y[k];F[o+1]=-gx/l;F[o+2]=-gz/l;
+    const lap=(Y[k+1]+Y[k-1]+Y[k+nx]+Y[k-nx])*0.25-Y[k];
+    // wider cavity
+    let cav=0;const R2=4;if(i>=R2&&j>=R2&&i<GF.nx-R2&&j<GF.nz-R2){cav=(Y[k+R2]+Y[k-R2]+Y[k+R2*nx]+Y[k-R2*nx]+Y[k+3+3*nx]+Y[k-3-3*nx]+Y[k+3-3*nx]+Y[k-3+3*nx])*0.125-Y[k];}
+    GF.dynB[k*16+7]=clamp((1-lap*90-Math.max(0,cav)*16)*255,70,255);
+    // key-light self shadow (march toward light)
+    let sh=1;const y0=Y[k];
+    for(let q=1;q<=6;q++){const fx=i+LSH.dx*q*1.15,fz=j+LSH.dz*q*1.15;const ii=fx|0,jj=fz|0;if(ii<0||jj<0||ii>=GF.nx-1||jj>=GF.nz-1)break;
+      const yy=Y[jj*nx+ii];const need=y0+LSH.slope*q*1.15*cs;if(yy>need){sh=Math.min(sh,1-clamp((yy-need)/0.012,0,1)*0.85);}}
+    GF.dynB[k*16+12]=sh*255;
+  }
+}
+function uploadField(){
+  if(!GF.vbF)return;
+  const nx=GF.nx;
+  if(GF.uploadAll){gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbF);gl.bufferSubData(gl.ARRAY_BUFFER,0,GF.dynF);gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbB);gl.bufferSubData(gl.ARRAY_BUFFER,0,GF.dynB);GF.uploadAll=false;}
+  else if(GF.rect){const r=GF.rect;const s=r.j0*nx,e=(r.j1+1)*nx;
+    gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbF);gl.bufferSubData(gl.ARRAY_BUFFER,s*12,GF.dynF.subarray(s*3,e*3));
+    gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbB);gl.bufferSubData(gl.ARRAY_BUFFER,s*16,GF.dynB.subarray(s*16,e*16));}
+  // index list
+  if(GF.partial)return;
+  let n=0;const V=GF.vis;const idx=GF.idx;
+  const r=GF.idxRect;
+  if(r){for(let j=Math.max(0,r.j0-1);j<Math.min(GF.nz-1,r.j1+1);j++)for(let i=Math.max(0,r.i0-1);i<Math.min(GF.nx-1,r.i1+1);i++){
+    const k=j*nx+i;if(V[k]>0.36||V[k+1]>0.36||V[k+nx]>0.36||V[k+nx+1]>0.36){idx[n++]=k;idx[n++]=k+nx;idx[n++]=k+1;idx[n++]=k+1;idx[n++]=k+nx;idx[n++]=k+nx+1;}}}
+  GF.idxCount=n;
+  if(n){gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,GF.ib);gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER,0,idx.subarray(0,n));}
+}
+function bindField(withB){
+  gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbS);gl.vertexAttribPointer(0,2,gl.FLOAT,false,8,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbF);gl.vertexAttribPointer(1,3,gl.FLOAT,false,12,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,GF.vbB);
+  if(withB===2){gl.vertexAttribPointer(2,4,gl.UNSIGNED_BYTE,true,16,4);}
+  else{gl.vertexAttribPointer(2,4,gl.UNSIGNED_BYTE,true,16,0);gl.vertexAttribPointer(3,4,gl.UNSIGNED_BYTE,true,16,4);gl.vertexAttribPointer(4,4,gl.UNSIGNED_BYTE,true,16,8);gl.vertexAttribPointer(5,4,gl.UNSIGNED_BYTE,true,16,12);}
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,GF.ib);
+}
+function sampleGrid(arr,x,z){
+  const fx=(x-GF.x0)/GF.cs,fz=(z-GF.z0)/GF.cs;const i=Math.floor(fx),j=Math.floor(fz);
+  if(i<0||j<0||i>=GF.nx-1||j>=GF.nz-1)return 0;const u=fx-i,v=fz-j;const k=j*GF.nx+i;
+  return (arr[k]*(1-u)+arr[k+1]*u)*(1-v)+(arr[k+GF.nx]*(1-u)+arr[k+GF.nx+1]*u)*v;
+}
+function detectHoles(){
+  const r=GF.idxRect||GF.rect;if(!r)return null;const nx=GF.nx;
+  const i0=Math.max(0,r.i0-1),i1=Math.min(GF.nx-1,r.i1+1),j0=Math.max(0,r.j0-1),j1=Math.min(GF.nz-1,r.j1+1);
+  const W2=i1-i0+1,H2=j1-j0+1;const seen=new Uint8Array(W2*H2);const q=[];
+  const empty=(i,j)=>GF.vis[j*nx+i]<0.5;
+  for(let i=i0;i<=i1;i++){for(const j of [j0,j1]){const k=(j-j0)*W2+(i-i0);if(!seen[k]&&empty(i,j)){seen[k]=1;q.push(i,j);}}}
+  for(let j=j0;j<=j1;j++){for(const i of [i0,i1]){const k=(j-j0)*W2+(i-i0);if(!seen[k]&&empty(i,j)){seen[k]=1;q.push(i,j);}}}
+  for(let h=0;h<q.length;h+=2){const i=q[h],j=q[h+1];
+    for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){const a=i+di,b=j+dj;if(a<i0||a>i1||b<j0||b>j1)continue;const k=(b-j0)*W2+(a-i0);if(seen[k]||!empty(a,b))continue;seen[k]=1;q.push(a,b);}}
+  let cnt=0,sx=0,sz=0;const cells=[];
+  for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){const k=(j-j0)*W2+(i-i0);if(!seen[k]&&empty(i,j)){cnt++;sx+=i;sz+=j;if(cells.length<4000)cells.push(GF.x0+i*GF.cs,GF.z0+j*GF.cs);}}
+  if(!cnt)return {cnt:0,cells};
+  return {cnt,x:GF.x0+sx/cnt*GF.cs,z:GF.z0+sz/cnt*GF.cs,cells};
+}
+
+/* ================= cheese, strands, fx ================= */
+const CHMAX=64;
+const CH={slide:0,n:0,alive:new Uint8Array(CHMAX),x:new Float32Array(CHMAX),z:new Float32Array(CHMAX),a:new Float32Array(CHMAX),
+  vx:new Float32Array(CHMAX),vz:new Float32Array(CHMAX),anc:new Int32Array(CHMAX),ox:new Float32Array(CHMAX),oz:new Float32Array(CHMAX)};
+function clearCheese(){CH.n=0;CH.alive.fill(0);}
+function addCheese(x,z,a){if(CH.n>=CHMAX)return;const k=CH.n++;CH.alive[k]=1;CH.x[k]=x;CH.z[k]=z;CH.a[k]=a;CH.vx[k]=0;CH.vz[k]=0;CH.anc[k]=-1;}
+function spawnCheeseOnDough(cx,cz,rad,count){
+  clearCheese();
+  // interior particles (not boundary)
+  computeDerived();
+  const cand=[];for(let i=0;i<P.n;i++){if(!P.alive[i]||P.bnd[i])continue;const d=Math.hypot(P.x[i]-cx,P.z[i]-cz);if(d<rad)cand.push(i);}
+  // prefer far from boundary: compute min distance to boundary particles
+  const bnd=[];for(let i=0;i<P.n;i++)if(P.alive[i]&&P.bnd[i])bnd.push(i);
+  const good=cand.filter(i=>{let m=1e9;for(const b of bnd){const d=Math.hypot(P.x[i]-P.x[b],P.z[i]-P.z[b]);if(d<m)m=d;}return m>0.085;});
+  const pool=good.length>4?good:cand;
+  for(let k=0;k<count&&pool.length;k++){const i=pool[Math.floor(rnd()*pool.length)];
+    addCheese(P.x[i]+(rnd()-0.5)*0.03,P.z[i]+(rnd()-0.5)*0.03,0.55+rnd()*0.35);}
+}
+function splatCheese(r){
+  const cs=GF.cs,nx=GF.nx,ch=GF.ch;const sg=0.036/cs;const R=Math.ceil(sg*3);const inv=1/(2*sg*sg);
+  for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;
+    const fx=(CH.x[k]-GF.x0)/cs,fz=(CH.z[k]-GF.z0)/cs;const ci=Math.round(fx),cj=Math.round(fz);
+    for(let j=Math.max(r.j0,cj-R);j<=Math.min(r.j1,cj+R);j++)for(let i=Math.max(r.i0,ci-R);i<=Math.min(r.i1,ci+R);i++){
+      const d2=(i-fx)*(i-fx)+(j-fz)*(j-fz);ch[j*nx+i]+=CH.a[k]*Math.exp(-d2*inv)*0.95;}}
+}
+function cheeseAt(x,z){return GF.ch?sampleGrid(GF.ch,x,z):0;}
+function cheeseUpdate(dt,plate){
+  let moved=0;
+  if(plate){
+    for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;const a=CH.anc[k];if(a<0||!P.alive[a]){CH.alive[k]=0;continue;}
+      CH.x[k]=P.x[a]+P.bendX[a]+CH.ox[k];CH.z[k]=P.z[a]+P.bendZ[a]+CH.oz[k];}
+    return 0;
+  }
+  const e=0.018;
+  for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;
+    let x=CH.x[k],z=CH.z[k];
+    const gx=(sampleGrid(GF.ySurf,x+e,z)-sampleGrid(GF.ySurf,x-e,z))/(2*e);
+    const gz=(sampleGrid(GF.ySurf,x,z+e)-sampleGrid(GF.ySurf,x,z-e))/(2*e);
+    const sl=Math.hypot(gx,gz);
+    // carried by dough
+    let cx=0,cz=0,cw=0;
+    forNear(x,z,0.05,(j)=>{const d=Math.hypot(P.x[j]-x,P.z[j]-z);if(d>0.05)return;const w=1-d/0.05;cx+=(P.x[j]-P.fx[j])*w;cz+=(P.z[j]-P.fz[j])*w;cw+=w;});
+    if(cw>0){cx/=cw;cz/=cw;}
+    const G=4.0;
+    if(sl>0.045){const f=(sl-0.045)/sl;CH.vx[k]-=gx*G*f*dt;CH.vz[k]-=gz*G*f*dt;}
+    CH.vx[k]*=Math.pow(0.35,dt);CH.vz[k]*=Math.pow(0.35,dt);
+    CH.slide+=Math.hypot(CH.vx[k],CH.vz[k])*dt*CH.a[k];
+    // cohesion
+    for(let m=0;m<CH.n;m++){if(m===k||!CH.alive[m])continue;const dx=CH.x[m]-x,dz=CH.z[m]-z;const d=Math.hypot(dx,dz);if(d<0.07&&d>0.012){CH.vx[k]+=dx/d*0.02*dt;CH.vz[k]+=dz/d*0.02*dt;}}
+    let nx2=x+CH.vx[k]*dt+cx*0.9,nz2=z+CH.vz[k]*dt+cz*0.9;
+    // stay on dough
+    if(sampleGrid(GF.vis,nx2,nz2)<0.62){
+      const j=nearestP(nx2,nz2,0.3,false);
+      if(j>=0){nx2=lerp(nx2,P.x[j],0.35);nz2=lerp(nz2,P.z[j],0.35);}CH.vx[k]*=0.3;CH.vz[k]*=0.3;}
+    moved=Math.max(moved,Math.abs(nx2-x)+Math.abs(nz2-z));
+    CH.x[k]=nx2;CH.z[k]=nz2;
+  }
+  return moved;
+}
+function anchorCheese(){
+  buildHash();
+  for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;const j=nearestP(CH.x[k],CH.z[k],0.25,false);
+    if(j<0){CH.alive[k]=0;continue;}CH.anc[k]=j;CH.ox[k]=CH.x[k]-P.x[j];CH.oz[k]=CH.z[k]-P.z[j];}
+}
+
+/* strands */
+const STR=[];
+function addStrand(a,b,x,z){
+  if(STR.length>=8)return;
+  STR.push({a,b,oax:0,oaz:0,obx:0,obz:0,L0:Math.max(0.02,Math.hypot(P.x[a]-P.x[b],P.z[a]-P.z[b])),r0:0.009,broken:0,t:0,cx:x,cz:z});
+}
+function strandEnds(s){
+  const a=s.a,b=s.b;
+  const ax=P.x[a]+P.bendX[a],az=P.z[a]+P.bendZ[a],bx=P.x[b]+P.bendX[b],bz=P.z[b]+P.bendZ[b];
+  const ay=sampleGrid(GF.y,ax,az)+0.004,by=sampleGrid(GF.y,bx,bz)+0.004;
+  return [ax,ay,az,bx,by,bz];
+}
+function strandUpdate(dt){
+  for(let k=STR.length-1;k>=0;k--){const s=STR[k];s.t+=dt;
+    if(!P.alive[s.a]||!P.alive[s.b]){if(!s.broken)s.broken=0.001;}
+    if(!s.broken){const e=strandEnds(s);const L=Math.hypot(e[3]-e[0],e[5]-e[2]);s.L=L;
+      if(L>0.6){s.broken=0.001;emit('strandBreak',{x:(e[0]+e[3])/2,z:(e[2]+e[5])/2});}}
+    else{s.broken+=dt;if(s.broken>0.45)STR.splice(k,1);}
+  }
+}
+const STRM={vbo:null,ibo:null,count:0,data:new Float32Array(8*8*12*11*2),idx:new Uint16Array(7400)};
+function buildStrandMesh(){
+  if(!STR.length){STRM.count=0;return;}
+  const SEG=11,SID=6;let v=0,ii=0;const D2=STRM.data,I=STRM.idx;
+  const push=(pts,rad)=>{const base=v;
+    for(let j=0;j<pts.length;j++){const a=pts[Math.max(0,j-1)],b=pts[Math.min(pts.length-1,j+1)];let tx=b[0]-a[0],ty=b[1]-a[1],tz=b[2]-a[2];let l=Math.hypot(tx,ty,tz)||1;tx/=l;ty/=l;tz/=l;
+      let bx=-tz,by=0,bz=tx;l=Math.hypot(bx,bz)||1;bx/=l;bz/=l;const cx=by*tz-bz*ty,cy=bz*tx-bx*tz,cz=bx*ty-by*tx;const r=rad[j];
+      for(let i=0;i<=SID;i++){const th=i/SID*TAU;const c=Math.cos(th),s=Math.sin(th);const nx=bx*c+cx*s,ny=by*c+cy*s,nz=bz*c+cz*s;const o=v*8;
+        D2[o]=pts[j][0]+nx*r;D2[o+1]=pts[j][1]+ny*r;D2[o+2]=pts[j][2]+nz*r;D2[o+3]=nx;D2[o+4]=ny;D2[o+5]=nz;D2[o+6]=i/SID;D2[o+7]=j/(pts.length-1);v++;}}
+    for(let j=0;j<pts.length-1;j++)for(let i=0;i<SID;i++){const a=base+j*(SID+1)+i,b=a+1,c=a+SID+1,d=c+1;I[ii++]=a;I[ii++]=c;I[ii++]=b;I[ii++]=b;I[ii++]=c;I[ii++]=d;}};
+  for(const s of STR){
+    if(!P.alive[s.a]&&!P.alive[s.b])continue;
+    const e=strandEnds(s);const L=Math.max(0.001,Math.hypot(e[3]-e[0],e[5]-e[2]));
+    const r=clamp(s.r0*Math.sqrt(s.L0/L),0.0022,0.011);
+    const sag=Math.min(0.06,0.03+0.05*L);
+    if(!s.broken){const pts=[],rad=[];for(let j=0;j<=SEG;j++){const t=j/SEG;pts.push([lerp(e[0],e[3],t),lerp(e[1],e[4],t)-sag*4*t*(1-t),lerp(e[2],e[5],t)]);rad.push(r*(0.75+0.5*Math.abs(t-0.5)*2)*(t<0.08||t>0.92?1.5:1));}push(pts,rad);}
+    else{const f=clamp(1-s.broken/0.45,0,1);for(const side of [0,1]){const pts=[],rad=[];const sx=side?e[3]:e[0],sy=side?e[4]:e[1],sz=side?e[5]:e[2];const tx=side?e[0]:e[3],tz=side?e[2]:e[5];
+        for(let j=0;j<=5;j++){const t=j/5*0.45*f;pts.push([lerp(sx,tx,t),sy-0.03*t*(1-f*0.5)-(1-f)*0.01*j,lerp(sz,tz,t)]);rad.push(r*(1.3-j*0.18));}
+        // pad to SEG
+        while(pts.length<SEG+1){pts.push(pts[pts.length-1].slice());rad.push(rad[rad.length-1]*0.8);}push(pts,rad);}}
+    if(v>(D2.length/8)-200)break;
+  }
+  STRM.count=ii;
+  if(!STRM.vbo){STRM.vbo=gl.createBuffer();STRM.ibo=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,STRM.vbo);gl.bufferData(gl.ARRAY_BUFFER,D2.byteLength,gl.DYNAMIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,STRM.ibo);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,I.byteLength,gl.DYNAMIC_DRAW);}
+  gl.bindBuffer(gl.ARRAY_BUFFER,STRM.vbo);gl.bufferSubData(gl.ARRAY_BUFFER,0,D2.subarray(0,v*8));
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,STRM.ibo);gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER,0,I.subarray(0,ii));
+}
+
+/* fx particles */
+const FXMAX=170;
+const FX={n:0,x:new Float32Array(FXMAX),y:new Float32Array(FXMAX),z:new Float32Array(FXMAX),vx:new Float32Array(FXMAX),vy:new Float32Array(FXMAX),vz:new Float32Array(FXMAX),
+  life:new Float32Array(FXMAX),max:new Float32Array(FXMAX),size:new Float32Array(FXMAX),type:new Uint8Array(FXMAX),c:new Float32Array(FXMAX*3),
+  buf:new Float32Array(FXMAX*8),vbo:null};
+function fx(type,x,y,z,count,spread){
+  spread=spread||0.03;
+  for(let k=0;k<count;k++){
+    let i;if(FX.n<FXMAX)i=FX.n++;else{let m=0,ml=1e9;for(let q=0;q<FXMAX;q++){const rem=FX.max[q]-FX.life[q];if(rem<ml){ml=rem;m=q;}}i=m;}
+    FX.type[i]=type;FX.life[i]=0;
+    FX.x[i]=x+(rnd()-0.5)*spread*2;FX.y[i]=y+rnd()*0.01;FX.z[i]=z+(rnd()-0.5)*spread*2;
+    const a=rnd()*TAU;const sp=rnd();
+    if(type===0){FX.vx[i]=Math.cos(a)*0.12*sp;FX.vz[i]=Math.sin(a)*0.12*sp;FX.vy[i]=0.12+rnd()*0.18;FX.max[i]=0.7+rnd()*0.5;FX.size[i]=0.010+rnd()*0.008;FX.c.set([0.98,0.97,0.94],i*3);}
+    else if(type===1){FX.vx[i]=(rnd()-0.5)*0.03;FX.vz[i]=(rnd()-0.5)*0.03;FX.vy[i]=0.10+rnd()*0.08;FX.max[i]=1.2+rnd()*0.8;FX.size[i]=0.035+rnd()*0.03;FX.c.set([0.95,0.95,0.95],i*3);}
+    else if(type===2){FX.vx[i]=Math.cos(a)*0.35*sp;FX.vz[i]=Math.sin(a)*0.35*sp;FX.vy[i]=0.25+rnd()*0.35;FX.max[i]=0.9+rnd()*0.4;FX.size[i]=0.008+rnd()*0.008;FX.c.set([0.62+rnd()*0.2,0.38,0.16],i*3);}
+    else if(type===3){FX.vx[i]=Math.cos(a)*0.08*sp;FX.vz[i]=Math.sin(a)*0.08*sp;FX.vy[i]=0.08+rnd()*0.12;FX.max[i]=0.6+rnd()*0.5;FX.size[i]=0.012+rnd()*0.012;FX.c.set([1.0,0.86,0.52],i*3);}
+    else if(type===4){FX.vx[i]=Math.cos(a)*0.25*sp;FX.vz[i]=Math.sin(a)*0.25*sp;FX.vy[i]=0.22+rnd()*0.2;FX.max[i]=0.55+rnd()*0.4;FX.size[i]=0.03+rnd()*0.03;FX.c.set([1,1,1],i*3);}
+  }
+}
+function fxUpdate(dt){
+  let w=0;
+  for(let i=0;i<FX.n;i++){
+    FX.life[i]+=dt;if(FX.life[i]>=FX.max[i])continue;
+    const t=FX.type[i];
+    if(t===0){FX.vy[i]-=0.5*dt;FX.vx[i]*=0.96;FX.vz[i]*=0.96;}
+    else if(t===1){FX.vy[i]*=0.99;FX.size[i]+=dt*0.03;FX.vx[i]+=(rnd()-0.5)*0.02*dt;}
+    else if(t===2){FX.vy[i]-=1.6*dt;}
+    else if(t===4){FX.vx[i]*=0.92;FX.vz[i]*=0.92;FX.vy[i]*=0.95;FX.size[i]+=dt*0.05;}
+    FX.x[i]+=FX.vx[i]*dt;FX.y[i]+=FX.vy[i]*dt;FX.z[i]+=FX.vz[i]*dt;
+    if(t===2||t===0){const sy=supportY(FX.x[i],FX.z[i]);if(FX.y[i]<sy){FX.y[i]=sy;FX.vy[i]*=-0.3;FX.vx[i]*=0.6;FX.vz[i]*=0.6;}}
+    // compact
+    if(w!==i){FX.x[w]=FX.x[i];FX.y[w]=FX.y[i];FX.z[w]=FX.z[i];FX.vx[w]=FX.vx[i];FX.vy[w]=FX.vy[i];FX.vz[w]=FX.vz[i];FX.life[w]=FX.life[i];FX.max[w]=FX.max[i];FX.size[w]=FX.size[i];FX.type[w]=FX.type[i];FX.c[w*3]=FX.c[i*3];FX.c[w*3+1]=FX.c[i*3+1];FX.c[w*3+2]=FX.c[i*3+2];}
+    w++;
+  }
+  FX.n=w;
+}
+function fxBuild(){
+  const b=FX.buf;
+  for(let i=0;i<FX.n;i++){const t=FX.life[i]/FX.max[i];const ty=FX.type[i];let a;
+    if(ty===1)a=Math.sin(t*PI)*0.22;else if(ty===3)a=(1-t)*(0.6+0.4*Math.sin(FX.life[i]*30));else if(ty===4)a=(1-t)*0.45;else a=(1-t*t)*0.9;
+    const o=i*8;b[o]=FX.x[i];b[o+1]=FX.y[i];b[o+2]=FX.z[i];b[o+3]=FX.c[i*3];b[o+4]=FX.c[i*3+1];b[o+5]=FX.c[i*3+2];b[o+6]=a;b[o+7]=FX.size[i];}
+  if(!FX.vbo){FX.vbo=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,FX.vbo);gl.bufferData(gl.ARRAY_BUFFER,b.byteLength,gl.DYNAMIC_DRAW);}
+  gl.bindBuffer(gl.ARRAY_BUFFER,FX.vbo);gl.bufferSubData(gl.ARRAY_BUFFER,0,b.subarray(0,FX.n*8));
+}
+
+/* ================= plate: breaking & sharing ================= */
+function geodesic(src,pc){
+  const adj=buildAdj();const n=P.n;const dist=new Float64Array(n).fill(1e9);dist[src]=0;
+  // binary heap
+  const hv=[],hk=[];const push=(k,v)=>{hv.push(v);hk.push(k);let i=hv.length-1;while(i>0){const p=(i-1)>>1;if(hv[p]<=hv[i])break;[hv[p],hv[i]]=[hv[i],hv[p]];[hk[p],hk[i]]=[hk[i],hk[p]];i=p;}};
+  const pop=()=>{const k=hk[0],v=hv[0];const lv=hv.pop(),lk=hk.pop();if(hv.length){hv[0]=lv;hk[0]=lk;let i=0;for(;;){const l=i*2+1,r=l+1;let m=i;if(l<hv.length&&hv[l]<hv[m])m=l;if(r<hv.length&&hv[r]<hv[m])m=r;if(m===i)break;[hv[m],hv[i]]=[hv[i],hv[m]];[hk[m],hk[i]]=[hk[i],hk[m]];i=m;}}return [k,v];};
+  push(src,0);
+  while(hv.length){const [a,d]=pop();if(d>dist[a])continue;
+    for(let s=adj.start[a];s<adj.start[a+1];s++){const b=adj.nb[s];const nd=d+Math.hypot(P.x[a]-P.x[b],P.z[a]-P.z[b]);if(nd<dist[b]){dist[b]=nd;push(b,nd);}}}
+  return dist;
+}
+function edgeCap(e){const a=ED.a[e],b=ED.b[e];const h=(P.hR[a]+P.hR[b])*0.5;let c=Math.max(1,Math.round(h/0.011));if(ED.type[e]===1)c=Math.max(1,Math.round(c*0.5));return c;}
+function maxflowCut(pc,dist,dS,dT){
+  const nodes=pc.list;const N=nodes.length+2;const S=N-2,T=N-1;const loc=new Int32Array(P.n).fill(-1);nodes.forEach((p,k)=>loc[p]=k);
+  const head=new Int32Array(N).fill(-1);const to=[],cap=[],nxt=[],eid=[];
+  const arc=(u,v,c,e)=>{to.push(v);cap.push(c);nxt.push(head[u]);eid.push(e);head[u]=to.length-1;};
+  const INF=1e6;let sc=0,tc=0;
+  for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;const u=loc[ED.a[e]],v=loc[ED.b[e]];if(u<0||v<0)continue;const c=edgeCap(e);arc(u,v,c,e);arc(v,u,c,e);}
+  for(const p of nodes){const k=loc[p];if(dist[p]<=dS){arc(S,k,INF,-1);arc(k,S,0,-1);sc++;}else if(dist[p]>=dT){arc(k,T,INF,-1);arc(T,k,0,-1);tc++;}}
+  if(!sc||!tc)return null;
+  let flow=0;const prev=new Int32Array(N);
+  for(let guard=0;guard<400;guard++){
+    prev.fill(-1);const q=[S];prev[S]=-2;let found=false;
+    for(let h=0;h<q.length&&!found;h++){const u=q[h];for(let a=head[u];a>=0;a=nxt[a]){if(cap[a]>0&&prev[to[a]]===-1){prev[to[a]]=a;if(to[a]===T){found=true;break;}q.push(to[a]);}}}
+    if(!found)break;
+    let f=INF;for(let v=T;v!==S;){const a=prev[v];f=Math.min(f,cap[a]);v=to[a^1];}
+    for(let v=T;v!==S;){const a=prev[v];cap[a]-=f;cap[a^1]+=f;v=to[a^1];}
+    flow+=f;if(flow>=INF)return null;
+  }
+  // reachable
+  const seen=new Uint8Array(N);const q=[S];seen[S]=1;
+  for(let h=0;h<q.length;h++){const u=q[h];for(let a=head[u];a>=0;a=nxt[a]){if(cap[a]>0&&!seen[to[a]]){seen[to[a]]=1;q.push(to[a]);}}}
+  const side=new Uint8Array(P.n);for(const p of nodes)if(seen[loc[p]])side[p]=1;
+  const cut=[];for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;const a=ED.a[e],b=ED.b[e];if(loc[a]<0||loc[b]<0)continue;if(side[a]!==side[b])cut.push(e);}
+  let sideCount=0;for(const p of nodes)if(side[p])sideCount++;
+  return {flow,cut,side,sideCount};
+}
+function planCut(a){
+  const pc=PIECES[P.piece[a]];if(!pc)return null;
+  const dist=geodesic(a,pc);let mg=0;for(const p of pc.list)mg=Math.max(mg,dist[p]);
+  if(mg<0.3||pc.list.length<30){W.__lastCut={rigid:true,mg,n:pc.list.length};return {rigid:true,pc,dist};}
+  let best=null;
+  for(const dT of [0.30,0.42,0.56,0.72]){if(dT>mg-0.06)break;
+    const r=maxflowCut(pc,dist,0.19,dT);if(!r)continue;
+    let sa=0;for(const p of pc.list)if(r.side[p])sa+=P.area[p];
+    r.score=r.flow/Math.pow(Math.max(4,r.sideCount),0.78)*(sa<0.025?1.6:1);
+    if(!best||r.score<best.score*0.95){best=r;best.dT=dT;}}
+  if(!best)return {rigid:true,pc,dist};
+  best.pc=pc;best.dist=dist;best.snapD=clamp(0.03+best.flow*0.0016,0.035,0.085);
+  W.__lastCut={flow:best.flow,side:best.sideCount,dT:best.dT,mg:+mg.toFixed(3),n:pc.list.length,cut:best.cut.length};
+  return best;
+}
+function plateBegin(gx,gz,tolW){
+  buildHash();
+  let a=-1,bd=tolW*tolW;const eat=DOG.eating?new Set(DOG.eating.list):null;
+  for(let i=0;i<P.n;i++){if(!P.alive[i]||(eat&&eat.has(i)))continue;const d=(P.x[i]-gx)**2+(P.z[i]-gz)**2;if(d<bd){bd=d;a=i;}}
+  if(a<0)return false;
+  DRAG.anchor=a;DRAG.mode='plate';DRAG.G0=[gx,gz];DRAG.G=[gx,gz];DRAG.Gp=[gx,gz];DRAG.D=[0,0];DRAG.maxD=0;DRAG.snapped=false;DRAG.rigid=null;DRAG.cut=null;
+  DRAG.press=0.6;DRAG.pressX=P.x[a];DRAG.pressZ=P.z[a];
+  for(let i=0;i<P.n;i++){if(P.eat[i])continue;P.ex[i]=P.x[i];P.ez[i]=P.z[i];}
+  removeCrumbs();if(!P.alive[a])return false;
+  const plan=planCut(a);
+  if(!plan)return false;
+  if(plan.rigid){DRAG.rigid=startRigid(plan.pc.list,a);}
+  else{DRAG.cut=plan;
+    for(const p of plan.pc.list){if(plan.side[p]){const d=plan.dist[p];P.bend[p]=clamp(1-d/(plan.dT+0.1),0.15,1);}else P.bend[p]=0;}}
+  emit('platePress',{x:P.x[a],z:P.z[a]});
+  return true;
+}
+function startRigid(list,a){
+  let sx=0,sz=0;for(const p of list){sx+=P.x[p];sz+=P.z[p];}
+  return {list:list.slice(),a,cx:sx/list.length,cz:sz/list.length,ang:0,lastX:P.x[a],lastZ:P.z[a]};
+}
+function plateDragUpdate(dt){
+  const D=DRAG.D;const dm=Math.hypot(D[0],D[1]);DRAG.maxD=Math.max(DRAG.maxD,dm);
+  if(dm>0.012)DRAG.press=Math.max(0,DRAG.press-dt*6);
+  if(DRAG.cut&&!DRAG.snapped){
+    const c=DRAG.cut;const f=clamp(dm/c.snapD,0,1);
+    for(const p of c.pc.list){if(c.side[p]){P.bendX[p]=D[0]*0.16*P.bend[p];P.bendZ[p]=D[1]*0.16*P.bend[p];}}
+    for(const e of c.cut){P.crack[ED.a[e]]=Math.max(P.crack[ED.a[e]],f*0.9);P.crack[ED.b[e]]=Math.max(P.crack[ED.b[e]],f*0.9);}
+    SND.creak(f);
+    if(dm>=c.snapD)doSnap();
+  }
+  if(DRAG.rigid){moveRigid(DRAG.rigid,dt);}
+}
+function doSnap(){
+  const c=DRAG.cut;DRAG.snapped=true;
+  // clear bends
+  let mx=0,mz=0,mc=0;
+  for(const e of c.cut){mx+=(P.x[ED.a[e]]+P.x[ED.b[e]])/2;mz+=(P.z[ED.a[e]]+P.z[ED.b[e]])/2;mc++;}
+  mx/=Math.max(1,mc);mz/=Math.max(1,mc);
+  // strands: cheese near the cut
+  const cutMid=c.cut.map(e=>[(P.x[ED.a[e]]+P.x[ED.b[e]])/2,(P.z[ED.a[e]]+P.z[ED.b[e]])/2]);
+  const sideA=[],sideB=[];for(const p of c.pc.list){(c.side[p]?sideA:sideB).push(p);}
+  const nearOf=(list,x,z)=>{let b=-1,bd=1e9;for(const p of list){const d=Math.hypot(P.x[p]-x,P.z[p]-z);if(d<bd){bd=d;b=p;}}return [b,bd];};
+  const used=[];
+  const cands=[];
+  for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;let md=1e9;for(const m of cutMid){md=Math.min(md,Math.hypot(CH.x[k]-m[0],CH.z[k]-m[1]));}if(md<0.12)cands.push([md,k]);}
+  cands.sort((u,v)=>u[0]-v[0]);
+  if(!cands.length){let bk=-1,bd=0.24;for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;for(const m of cutMid){const d=Math.hypot(CH.x[k]-m[0],CH.z[k]-m[1]);if(d<bd){bd=d;bk=k;}}}if(bk>=0)cands.push([bd,bk]);}
+  for(const [md,k] of cands){if(used.length>=3)break;const x=CH.x[k],z=CH.z[k];if(used.some(u=>Math.hypot(u[0]-x,u[1]-z)<0.05))continue;
+    const [a]=nearOf(sideA,x,z),[b]=nearOf(sideB,x,z);if(a>=0&&b>=0){addStrand(a,b,x,z);used.push([x,z]);}}
+  // remove crossing triangles & cut edges
+  for(const e of c.cut){if(!ED.alive[e])continue;const t0=ED.t0[e],t1=ED.t1[e];if(t0>=0)killTri(t0);if(t1>=0)killTri(t1);if(ED.alive[e])killEdge(e);}
+  for(let i=0;i<P.n;i++){P.bendX[i]=0;P.bendZ[i]=0;P.bend[i]=0;}
+  computeDerived();computePieces();
+  for(const pc of PIECES)pieceStats(pc);
+  removeCrumbs();
+  const a=DRAG.anchor;
+  if(P.alive[a]){DRAG.rigid=startRigid(PIECES[P.piece[a]].list,a);}
+  emit('snap',{x:mx,z:mz,strands:used.length});
+  fx(2,mx,0.06,mz,10,0.03);
+  if(used.length)achieve('d6','snap with '+used.length+' cheese bridge');
+  else if(!DISC.d6s)DISC.d6s=1;
+}
+function moveRigid(R,dt){
+  const a=R.a;if(!P.alive[a])return;
+  const tx=DRAG.G[0],tz=DRAG.G[1];
+  // anchor follows finger (smooth)
+  let dx=(tx+DRAG.off[0]-P.x[a]),dz=(tz+DRAG.off[1]-P.z[a]);
+  const k=Math.min(1,dt*18);dx*=k;dz*=k;
+  // towing rotation
+  let cx=0,cz=0;for(const p of R.list){cx+=P.x[p];cz+=P.z[p];}cx/=R.list.length;cz/=R.list.length;
+  const rx=cx-P.x[a],rz=cz-P.z[a];const rl=Math.hypot(rx,rz);let ang=0;
+  const ml=Math.hypot(dx,dz);
+  if(rl>0.02&&ml>1e-5){const cr=(rx*(-dz)-rz*(-dx))/(rl*ml);ang=clamp(cr*ml*2.2,-0.08,0.08);}
+  const ca=Math.cos(ang),sa=Math.sin(ang);
+  for(const p of R.list){let px=P.x[p]-P.x[a],pz=P.z[p]-P.z[a];const nx=px*ca-pz*sa,nz=px*sa+pz*ca;P.x[p]=P.x[a]+nx+dx;P.z[p]=P.z[a]+nz+dz;}
+  // keep in plate / dog corridor
+  let ox=0,oz=0,oc=0;
+  for(const p of R.list){const x0=P.x[p],z0=P.z[p];clampPlate(p,true);ox+=P.x[p]-x0;oz+=P.z[p]-z0;oc++;P.x[p]=x0;P.z[p]=z0;}
+  if(oc){ox/=oc;oz/=oc;if(Math.abs(ox)+Math.abs(oz)>1e-5){for(const p of R.list){P.x[p]+=ox*1.0;P.z[p]+=oz*1.0;}}}
+  for(const p of R.list){P.px[p]=P.x[p];P.pz[p]=P.z[p];}
+}
+function releasePlate(){
+  for(let i=0;i<P.n;i++){P.bendX[i]=0;P.bendZ[i]=0;P.bend[i]=0;}
+  if(DRAG.cut&&!DRAG.snapped){emit('springBack',{});}
+  if(DRAG.rigid){
+    const pc=PIECES[P.piece[DRAG.rigid.a]];
+    if(pc){pieceStats(pc);
+      const m=LAY.dogZone;const dd=Math.hypot(pc.cx-m.x,pc.cz-m.z);
+      const onPlate=Math.hypot(pc.cx-LAY.plate.x,pc.cz-LAY.plate.z)<LAY.plate.r;
+      if(dd<m.r+0.08||!onPlate){if(!dogEat(pc,true))DOGQ.push({t:TIME.t+0.3,pid:pc.list[0],force:true});}
+      else if(pc.area<0.07||(PIECES.length===1&&pc.area<0.12)){emit('smallDrop',{x:pc.cx,z:pc.cz});DOGQ.push({t:TIME.t+0.55,pid:pc.list[0]});}
+      else emit('pieceDrop',{x:pc.cx,z:pc.cz});
+    }
+  }
+}
+function setTimeout0(f){try{f();}catch(e){}}
+function removeCrumbs(){
+  let any=false;
+  for(const pc of PIECES){if(pc.area===undefined)pieceStats(pc);if(pc.list.length>=8&&pc.area>=0.0025)continue;if(DRAG.active&&pc.list.indexOf(DRAG.anchor)>=0&&pc.list.length>=4)continue;
+    const set=new Uint8Array(P.n);for(const p of pc.list)set[p]=1;
+    for(let t=0;t<TR.n;t++){if(TR.alive[t]&&(set[TR.a[t]]||set[TR.b[t]]||set[TR.c[t]]))killTri(t);}
+    for(let e=0;e<ED.n;e++){if(ED.alive[e]&&(set[ED.a[e]]||set[ED.b[e]]))killEdge(e);}
+    for(const p of pc.list){if(!P.alive[p])continue;fx(2,P.x[p],supportY(P.x[p],P.z[p])+0.02,P.z[p],1,0.01);killP(p);}
+    for(let k=0;k<CH.n;k++){if(CH.alive[k]&&CH.anc[k]>=0&&set[CH.anc[k]])CH.alive[k]=0;}
+    any=true;}
+  if(any){computeDerived();computePieces();for(const pc of PIECES)pieceStats(pc);}
+}
+const DOGQ=[];
+function dogEat(pc,shared){
+  if(DOG.eating)return false;
+  pieceStats(pc);
+  DOG.eating={list:pc.list.slice(),t:0,cx:pc.cx,cz:pc.cz,shared:!!shared,area:pc.area};
+  for(const p of pc.list){P.ex[p]=P.x[p];P.ez[p]=P.z[p];P.eat[p]=1;}
+  // break strands attached
+  for(const s of STR){if(pc.list.indexOf(s.a)>=0||pc.list.indexOf(s.b)>=0){if(!s.broken)s.broken=0.001;}}
+  emit('dogEat',{x:pc.cx,z:pc.cz,shared:!!shared});
+  return true;
+}
+function dogEatUpdate(dt){
+  const E=DOG.eating;if(!E)return;
+  E.t+=dt;const T=1.25;const f=clamp(E.t/T,0,1);
+  const m=dogMouthWorld();
+  const pull=sstep(0.15,0.75,f);const shrink=1-sstep(0.35,0.95,f)*0.92;
+  for(const p of E.list){if(!P.alive[p])continue;
+    const ox=P.ex[p]-E.cx,oz=P.ez[p]-E.cz;
+    P.x[p]=lerp(E.cx,m[0],pull)+ox*shrink;P.z[p]=lerp(E.cz,m[2],pull)+oz*shrink;
+    const sy=supportY(P.x[p],P.z[p]);P.lift[p]=Math.max(0,(m[1]-0.03-sy))*pull*0.9;P.liftV[p]=0;}
+  DOG.leanT=sstep(0,0.3,f)*(1-sstep(0.8,1,f));
+  DOG.jaw=f>0.3&&f<0.95?0.5+0.5*Math.sin(E.t*22):lerp(DOG.jaw,0,0.2);
+  if(E.t>0.5&&!E.munched){E.munched=true;emit('munch',{});}
+  if(f>=1){
+    for(const p of E.list){if(!P.alive[p])continue;}
+    // remove particles & triangles
+    const set=new Uint8Array(P.n);for(const p of E.list)set[p]=1;
+    for(let t=0;t<TR.n;t++){if(TR.alive[t]&&(set[TR.a[t]]||set[TR.b[t]]||set[TR.c[t]]))killTri(t);}
+    for(let e=0;e<ED.n;e++){if(ED.alive[e]&&(set[ED.a[e]]||set[ED.b[e]]))killEdge(e);}
+    for(const p of E.list){P.eat[p]=0;killP(p);}
+    for(let k=0;k<CH.n;k++){if(CH.alive[k]&&CH.anc[k]>=0&&set[CH.anc[k]])CH.alive[k]=0;}
+    computeDerived();computePieces();
+    fx(2,m[0],m[1]-0.05,m[2],8,0.03);
+    DOG.eating=null;DOG.happy=1;emit('eaten',{left:P.cnt});
+  }
+}
+
+/* ================= audio (Web Audio synthesis) ================= */
+const SND=(function(){
+  let ctx=null,master=null,comp=null,noise=null,ok=false;
+  let stG=null,stO1=null,stO2=null,stF=null,stLfo=null,stLfoG=null,stOn=false,stLast=0;
+  let szG=null,szF=null,rwG=null,rwF=null,crG=null,crO=null;
+  let lastT={};
+  function init(){
+    if(ctx)return;
+    const AC=W.AudioContext||W.webkitAudioContext;if(!AC)return;
+    try{ctx=new AC();}catch(e){ctx=null;return;}
+    try{
+      comp=ctx.createDynamicsCompressor();comp.threshold.value=-16;comp.knee.value=12;comp.ratio.value=4;comp.attack.value=0.004;comp.release.value=0.18;
+      master=ctx.createGain();master.gain.value=0.62;master.connect(comp);comp.connect(ctx.destination);
+      const len=ctx.sampleRate*2;noise=ctx.createBuffer(1,len,ctx.sampleRate);const d=noise.getChannelData(0);let b=0;
+      for(let i=0;i<len;i++){const w=Math.random()*2-1;b=0.97*b+0.03*w;d[i]=w*0.6+b*2.2;}
+      // stretch voice
+      stG=ctx.createGain();stG.gain.value=0;stF=ctx.createBiquadFilter();stF.type='lowpass';stF.frequency.value=900;stF.Q.value=4;
+      stO1=ctx.createOscillator();stO1.type='triangle';stO1.frequency.value=180;stO2=ctx.createOscillator();stO2.type='sine';stO2.frequency.value=362;
+      const g2=ctx.createGain();g2.gain.value=0.35;stO2.connect(g2);g2.connect(stF);stO1.connect(stF);
+      stLfo=ctx.createOscillator();stLfo.frequency.value=22;stLfoG=ctx.createGain();stLfoG.gain.value=0;stLfo.connect(stLfoG);
+      const am=ctx.createGain();am.gain.value=0.7;stLfoG.connect(am.gain);stF.connect(am);am.connect(stG);stG.connect(master);
+      stO1.start();stO2.start();stLfo.start();
+      // sizzle loop
+      const sn=ctx.createBufferSource();sn.buffer=noise;sn.loop=true;szF=ctx.createBiquadFilter();szF.type='bandpass';szF.frequency.value=5200;szF.Q.value=0.8;
+      szG=ctx.createGain();szG.gain.value=0;sn.connect(szF);szF.connect(szG);szG.connect(master);sn.start();
+      // rewind loop
+      const rn=ctx.createBufferSource();rn.buffer=noise;rn.loop=true;rn.playbackRate.value=0.6;rwF=ctx.createBiquadFilter();rwF.type='bandpass';rwF.frequency.value=1400;rwF.Q.value=3;
+      rwG=ctx.createGain();rwG.gain.value=0;rn.connect(rwF);rwF.connect(rwG);rwG.connect(master);rn.start();
+      // creak
+      crO=ctx.createOscillator();crO.type='sawtooth';crO.frequency.value=90;const crF=ctx.createBiquadFilter();crF.type='bandpass';crF.frequency.value=700;crF.Q.value=6;
+      crG=ctx.createGain();crG.gain.value=0;crO.connect(crF);crF.connect(crG);crG.connect(master);crO.start();
+      ok=true;
+    }catch(e){ok=false;}
+  }
+  function unlock(){init();if(ctx&&ctx.state!=='running'){try{const p=ctx.resume();if(p&&p.catch)p.catch(()=>{});}catch(e){}}}
+  function suspend(){if(ctx&&ctx.state==='running'){try{const p=ctx.suspend();if(p&&p.catch)p.catch(()=>{});}catch(e){}}}
+  const live=()=>ok&&ctx&&ctx.state==='running';
+  const t0=()=>ctx.currentTime;
+  function rate(k,dt){const n=performance.now();if(lastT[k]&&n-lastT[k]<dt*1000)return false;lastT[k]=n;return true;}
+  function env(g,t,a,peak,d){g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(peak,t+a);g.gain.exponentialRampToValueAtTime(0.0001,t+a+d);}
+  function tone(type,f0,f1,dur,vol,delay,q){
+    if(!live())return;const t=t0()+(delay||0);const o=ctx.createOscillator();o.type=type;o.frequency.setValueAtTime(f0,t);
+    if(f1&&f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,t+dur);
+    const g=ctx.createGain();env(g,t,Math.min(0.012,dur*0.2),vol,dur);o.connect(g);g.connect(master);o.start(t);o.stop(t+dur+0.05);
+  }
+  function bell(f,dur,vol,delay){if(!live())return;tone('sine',f,f,dur,vol,delay);tone('sine',f*2.01,f*2.01,dur*0.5,vol*0.25,delay);tone('sine',f*3.98,f*3.98,dur*0.25,vol*0.08,delay);}
+  function nz(type,f,q,dur,vol,delay,f1,rateP){
+    if(!live())return;const t=t0()+(delay||0);const s=ctx.createBufferSource();s.buffer=noise;s.playbackRate.value=rateP||1;
+    const fl=ctx.createBiquadFilter();fl.type=type;fl.frequency.setValueAtTime(f,t);if(f1)fl.frequency.exponentialRampToValueAtTime(f1,t+dur);fl.Q.value=q;
+    const g=ctx.createGain();env(g,t,Math.min(0.01,dur*0.2),vol,dur);s.connect(fl);fl.connect(g);g.connect(master);
+    const off=Math.random()*1.5;s.start(t,off);s.stop(t+dur+0.05);
+  }
+  return {
+    unlock,suspend,get ready(){return ok&&ctx&&ctx.state==='running';},get state(){return ctx?ctx.state:'none';},
+    squish(thick,baked){if(!live())return;const p=clamp(1.4-thick*14,0.6,1.3);nz('lowpass',700*p,1.2,0.16,0.45,0,180);tone('sine',190*p,110*p,0.16,0.28);
+      tone('sine',920*p,640*p,0.07,0.05,0.02);if(baked)nz('bandpass',2400,2,0.05,0.12,0);},
+    tok(){if(!live())return;tone('sine',420,300,0.08,0.18);nz('bandpass',1800,3,0.04,0.14,0);},
+    stretch(amount,thick,speed){if(!live())return;const t=t0();
+      const vol=clamp(speed*0.9,0,0.32)*clamp(amount*6,0.2,1);
+      const f=clamp(120+amount*420+(0.04-thick)*2600,90,820);
+      stO1.frequency.setTargetAtTime(f,t,0.05);stO2.frequency.setTargetAtTime(f*2.02,t,0.05);stF.frequency.setTargetAtTime(f*3.2,t,0.08);
+      stLfo.frequency.setTargetAtTime(14+amount*40,t,0.1);stLfoG.gain.setTargetAtTime(0.5,t,0.1);
+      stG.gain.setTargetAtTime(vol,t,0.04);stLast=performance.now();},
+    stretchOff(){if(!live())return;stG.gain.setTargetAtTime(0,t0(),0.06);},
+    boing(amount){if(!live())return;const a=clamp(amount,0,0.5);const f=260+a*500;const t=t0();
+      const o=ctx.createOscillator();o.type='sine';o.frequency.setValueAtTime(f*0.7,t);o.frequency.exponentialRampToValueAtTime(f*1.25,t+0.06);o.frequency.exponentialRampToValueAtTime(f*0.92,t+0.22);
+      const g=ctx.createGain();env(g,t,0.01,0.2+a*0.3,0.26);o.connect(g);g.connect(master);o.start(t);o.stop(t+0.35);},
+    rewind(level){if(!live())return;const t=t0();rwG.gain.setTargetAtTime(level*0.22,t,0.04);rwF.frequency.setTargetAtTime(900+level*1600,t,0.08);if(rate('rwtick',0.07))nz('highpass',3500,1,0.012,0.12,0);},
+    rewindOff(){if(!live())return;rwG.gain.setTargetAtTime(0,t0(),0.08);},
+    sizzle(level){if(!live())return;szG.gain.setTargetAtTime(level*0.10,t0(),0.12);if(level>0.05&&rate('crk',0.05+Math.random()*0.12))nz('highpass',4000,1,0.008,0.06*level,0);},
+    dialTick(dir){if(!live()||!rate('dial',0.045))return;tone('square',dir>0?2600:2100,null,0.012,0.03);},
+    baked(kind){if(!live())return;if(kind===1){bell(659,0.5,0.16,0);bell(988,0.6,0.13,0.09);tone('sine',180,240,0.18,0.18,0);}
+      else if(kind===2){bell(1175,0.35,0.12,0);bell(1568,0.4,0.11,0.07);nz('highpass',5000,1,0.08,0.10,0.02);}
+      else{bell(784,0.45,0.13,0);bell(1046,0.5,0.11,0.08);}},
+    toast(){if(!live())return;bell(880,0.25,0.08,0);},
+    weld(kind){if(!live()||!rate('weld',0.25))return;nz('lowpass',600,1,0.12,0.3,0,200);tone('sine',kind===2?1320:1046,null,0.12,0.12,0.04);},
+    unweld(){if(!live()||!rate('unweld',0.2))return;tone('sine',700,380,0.12,0.12);nz('bandpass',1500,2,0.08,0.12,0);},
+    puff(){if(!live())return;tone('sine',220,520,0.5,0.18);nz('lowpass',500,1,0.5,0.18,0,1400);bell(1318,0.4,0.09,0.4);},
+    deflate(){if(!live())return;nz('bandpass',2500,0.8,0.7,0.32,0,600);tone('sine',380,140,0.45,0.15,0.05);},
+    ring(){if(!live())return;bell(1046,0.5,0.12,0);bell(1318,0.5,0.12,0.1);bell(1568,0.7,0.13,0.2);},
+    ringPull(){if(!live()||!rate('rp',1))return;tone('triangle',330,440,0.2,0.08);},
+    tear(){if(!live()||!rate('tear',0.15))return;tone('sine',600,300,0.1,0.08);},
+    platePress(){if(!live())return;tone('sine',300,220,0.07,0.14);nz('bandpass',1500,2,0.05,0.16,0);},
+    creak(f){if(!live())return;const t=t0();crO.frequency.setTargetAtTime(70+f*110,t,0.05);crG.gain.setTargetAtTime(f>0.05&&f<1?0.05*f:0,t,0.05);},
+    creakOff(){if(!live())return;crG.gain.setTargetAtTime(0,t0(),0.05);},
+    snap(){if(!live())return;nz('highpass',2200,0.7,0.06,0.55,0);tone('square',1800,900,0.03,0.08);nz('bandpass',900,2,0.12,0.2,0.02);
+      for(let k=0;k<4;k++)nz('highpass',4000,1,0.01,0.1,0.05+k*0.04+Math.random()*0.03);
+      const t=t0()+0.08;const o=ctx.createOscillator();o.type='sine';o.frequency.setValueAtTime(330,t);o.frequency.exponentialRampToValueAtTime(190,t+0.45);
+      const v=ctx.createOscillator();v.frequency.value=9;const vg=ctx.createGain();vg.gain.value=14;v.connect(vg);vg.connect(o.frequency);
+      const g=ctx.createGain();env(g,t,0.03,0.16,0.45);o.connect(g);g.connect(master);o.start(t);o.stop(t+0.55);v.start(t);v.stop(t+0.55);},
+    strandBreak(){if(!live())return;tone('sine',500,900,0.12,0.1);},
+    door(open){if(!live())return;nz('lowpass',300,1,0.18,0.35,0);tone('sine',95,70,0.2,0.22);
+      const t=t0()+0.05;const o=ctx.createOscillator();o.type='sawtooth';o.frequency.setValueAtTime(open?160:130,t);o.frequency.linearRampToValueAtTime(open?120:170,t+0.35);
+      const f=ctx.createBiquadFilter();f.type='bandpass';f.frequency.value=900;f.Q.value=8;const g=ctx.createGain();env(g,t,0.05,0.025,0.32);o.connect(f);f.connect(g);g.connect(master);o.start(t);o.stop(t+0.45);},
+    tray(){if(!live())return;nz('lowpass',420,1,0.55,0.16,0,250);},
+    serve(){if(!live())return;bell(784,0.6,0.12,0.0);bell(988,0.6,0.12,0.12);bell(1175,0.8,0.13,0.24);bell(1568,0.9,0.10,0.38);},
+    land(){if(!live())return;nz('lowpass',500,1,0.2,0.4,0,150);tone('sine',2600,2600,0.25,0.05,0.02);tone('sine',3900,3900,0.2,0.03,0.02);},
+    arrive(){if(!live())return;tone('sine',300,600,0.18,0.18);nz('lowpass',600,1,0.25,0.25,0.08,200);tone('sine',160,110,0.2,0.2,0.1);},
+    spread(){if(!live())return;tone('triangle',200,330,0.5,0.1);},
+    dog(kind){if(!live())return;
+      if(kind==='wuf'){const t=t0();const o=ctx.createOscillator();o.type='sawtooth';o.frequency.setValueAtTime(520,t);o.frequency.exponentialRampToValueAtTime(330,t+0.12);
+        const f1=ctx.createBiquadFilter();f1.type='bandpass';f1.frequency.value=900;f1.Q.value=3;const g=ctx.createGain();env(g,t,0.01,0.16,0.13);o.connect(f1);f1.connect(g);g.connect(master);o.start(t);o.stop(t+0.2);}
+      else if(kind==='sniff'){for(let k=0;k<3;k++)nz('bandpass',2600,2,0.05,0.10,k*0.09);}
+      else if(kind==='munch'){for(let k=0;k<4;k++){nz('bandpass',1200+Math.random()*900,1.5,0.06,0.25,k*0.13);tone('sine',180,120,0.05,0.08,k*0.13);}}
+      else if(kind==='happy'){tone('sine',720,980,0.18,0.08);tone('sine',980,860,0.16,0.07,0.18);}
+      else if(kind==='hmm'){tone('sine',560,760,0.28,0.07);}},
+    tick(){if(!live()||!rate('tick',0.12))return;tone('sine',1500,1300,0.04,0.05);},
+    clink(){if(!live()||!rate('clink',0.15))return;tone('sine',2650,2650,0.3,0.06);tone('sine',3970,3970,0.22,0.035);},
+    tapOven(){if(!live()||!rate('tov',0.15))return;nz('bandpass',900,4,0.06,0.12,0);tone('sine',240,200,0.06,0.06);},
+    sparkle(){if(!live()||!rate('spk',0.3))return;bell(2093,0.3,0.05,0);bell(2637,0.3,0.04,0.06);},
+    plateGlow(){if(!live()||!rate('pg',0.8))return;tone('sine',660,880,0.22,0.06);}
+  };
+})();
+
+/* ================= game flow ================= */
+const G={phase:'oven',round:1,serveT:0,arriveT:0,emptyT:0,bakes:0,lastInput:0,demoArmed:true,lastDemo:-99,outline:null,storeOK:true,
+  invite:null,inviteT:0,inviteEval:0,started:0,ovenTime:0,serveMap:null,rdone:{},rto:{},roundBakes:0};
+const OVEN={door:0,tray:0,warm:0,wob:0,wobV:0,plateWob:0,plateWobV:0,plateGlow:0};
+const DIAL={ang:0,vel:0,acc:0};
+const MASK={w:40,h:30,x0:-0.64,z0:-0.62,cs:0.032};
+
+function defaultShape(){
+  const cx=0.0,cz=-0.13,R=0.385;
+  const ax=0.32,az=-0.115,bx=0.59,bz=-0.1,rr=0.074;
+  return (x,z)=>{if(Math.hypot(x-cx,z-cz)<=R)return true;
+    const vx=bx-ax,vz=bz-az;const t=clamp(((x-ax)*vx+(z-az)*vz)/(vx*vx+vz*vz),0,1);const d=Math.hypot(x-ax-vx*t,z-az-vz*t);
+    return d<=rr*(1-0.25*t);};
+}
+function maskShape(m){
+  const at=(i,j)=>(i<0||j<0||i>=MASK.w||j>=MASK.h)?0:m[j*MASK.w+i];
+  return (x,z)=>{const fx=(x-MASK.x0)/MASK.cs-0.5,fz=(z-MASK.z0)/MASK.cs-0.5;const i=Math.floor(fx),j=Math.floor(fz);const u=fx-i,v=fz-j;
+    const val=(at(i,j)*(1-u)+at(i+1,j)*u)*(1-v)+(at(i,j+1)*(1-u)+at(i+1,j+1)*u)*v;return val>0.36;};
+}
+function setupDough(mask,rawTongue){
+  const bbox={x0:-0.70,x1:0.70,z0:-0.66,z1:0.40};
+  if(mask)buildDough(maskShape(mask),bbox);else buildDough(defaultShape(),bbox);
+  if(P.cnt<40){buildDough(defaultShape(),bbox);}
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.bake[i]=1;P.soft[i]=0;P.edited[i]=0;}
+  // raw tongue: rightmost boundary region
+  let best=-1,bx=-1e9;
+  for(let i=0;i<P.n;i++){if(!P.alive[i]||!P.bnd[i])continue;const s=P.x[i]+P.z[i]*0.15;if(s>bx){bx=s;best=i;}}
+  G.tongue=null;
+  if(best>=0&&rawTongue!==false){
+    const cx=P.x[best],cz=P.z[best];const r=mask?0.10:0.16;
+    for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const d=Math.hypot(P.x[i]-cx,P.z[i]-cz);
+      if(mask?d<r:(P.x[i]>0.41)){P.bake[i]=mask?clamp((d/r-0.6)*2.5,0,1):clamp((0.45-P.x[i])/0.04,0,1);if(P.bake[i]<0.5)P.soft[i]=1;}}
+    G.tongue={i:best,x:cx,z:cz};
+  }
+  computeDerived();
+  // cheese
+  let sx=0,sz=0,c=0;for(let i=0;i<P.n;i++){if(!P.alive[i]||P.bake[i]<0.9)continue;sx+=P.x[i];sz+=P.z[i];c++;}
+  const ccx=c?sx/c:0,ccz=c?sz/c:-0.13;
+  let rr=0;for(let i=0;i<P.n;i++){if(P.alive[i]&&P.bake[i]>0.9)rr=Math.max(rr,Math.hypot(P.x[i]-ccx,P.z[i]-ccz));}
+  spawnCheeseOnDough(ccx,ccz,Math.max(0.12,rr*0.72),Math.round(clamp(c/9,18,44)));
+  BANDS.length=0;STR.length=0;
+  POCKET.inflated=false;POCKET.air=0;POCKET.opened=false;POCKET.vent=0;RING.has=false;RING.expand=0;
+  computePieces();
+}
+function captureOutline(){
+  const m=new Uint8Array(MASK.w*MASK.h);let cnt=0;
+  for(let j=0;j<MASK.h;j++)for(let i=0;i<MASK.w;i++){const x=MASK.x0+(i+0.5)*MASK.cs,z=MASK.z0+(j+0.5)*MASK.cs;
+    if(z>0.36)continue;if(sampleGrid(GF.vis,x,z)>0.42){m[j*MASK.w+i]=1;cnt++;}}
+  // also count dough that went to the corridor: ignore. Require reasonable size
+  if(cnt<110||!validMask(m))return null;
+  return m;
+}
+/* ---- persistence ---- */
+const STORE_KEY='gf261110_8_outline_v1';
+const B64='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+function encMask(m){let s='';for(let k=0;k<m.length;k+=6){let v=0;for(let b=0;b<6;b++){v=(v<<1)|(m[k+b]?1:0);}s+=B64[v];}return s;}
+function decMask(s){const n=MASK.w*MASK.h;const L=Math.ceil(n/6);if(typeof s!=='string'||s.length!==L)return null;const m=new Uint8Array(n);
+  for(let c=0;c<L;c++){const v=B64.indexOf(s[c]);if(v<0)return null;for(let b=0;b<6;b++){const k=c*6+b;if(k<n)m[k]=(v>>(5-b))&1;}}return m;}
+function validMask(m){
+  if(!m)return false;let cnt=0;for(const v of m)cnt+=v;if(cnt<110||cnt>m.length*0.92)return false;
+  // largest component
+  const seen=new Uint8Array(m.length);let best=0;
+  for(let k=0;k<m.length;k++){if(!m[k]||seen[k])continue;let c=0;const q=[k];seen[k]=1;
+    for(let h=0;h<q.length;h++){const u=q[h];c++;const i=u%MASK.w,j=(u/MASK.w)|0;
+      for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){const a=i+di,b=j+dj;if(a<0||b<0||a>=MASK.w||b>=MASK.h)continue;const v=b*MASK.w+a;if(m[v]&&!seen[v]){seen[v]=1;q.push(v);}}}
+    best=Math.max(best,c);}
+  return best>=110;
+}
+function storage(){try{const s=W.localStorage;return s||null;}catch(e){return null;}}
+function loadOutline(){
+  try{const st=storage();if(!st)return null;const s=st.getItem(STORE_KEY);if(!s)return null;
+    let o=null;try{o=JSON.parse(s);}catch(e){o=null;}
+    if(!o||typeof o!=='object'||o.v!==1||o.w!==MASK.w||o.h!==MASK.h){try{st.removeItem(STORE_KEY);}catch(e){}return null;}
+    const m=decMask(o.d);if(!validMask(m)){try{st.removeItem(STORE_KEY);}catch(e){}return null;}
+    G.round=clamp((o.n|0)+1,1,9999);return m;
+  }catch(e){return null;}
+}
+function saveOutline(m){
+  G.outline=m;
+  try{const st=storage();if(!st){G.storeOK=false;return;}st.setItem(STORE_KEY,JSON.stringify({v:1,w:MASK.w,h:MASK.h,d:encMask(m),n:G.round}));G.storeOK=true;}
+  catch(e){G.storeOK=false;}
+}
+
+/* ---- serving ---- */
+function startServe(){
+  G.phase='serve';G.serveT=0;
+  const m=captureOutline();if(m)saveOutline(m);
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.bake[i]<1){P.bakeR[i]=Math.max(P.bakeR[i],2.2);}}
+  emit('serveStart',{});
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.gx[i]=P.x[i];P.gz[i]=P.z[i];if(P.soft[i]&&P.inD[i]){P.gx[i]=lerp(P.x[i],P.ex[i],0.78);P.gz[i]=lerp(P.z[i],P.ez[i],0.78);}P.dg[i]=0;}
+  G.serveMap=null;
+  DRAG.active=false;
+}
+function serveMapCompute(){
+  computeDerived();
+  let sx=0,sz=0,ar=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;sx+=P.x[i]*P.area[i];sz+=P.z[i]*P.area[i];ar+=P.area[i];}
+  const cx=sx/Math.max(ar,1e-6),cz=sz/Math.max(ar,1e-6);const ds=[];for(let i=0;i<P.n;i++){if(P.alive[i])ds.push(Math.hypot(P.x[i]-cx,P.z[i]-cz));}
+  ds.sort((a,b)=>a-b);const rm=ds.length?ds[Math.floor(ds.length*0.93)]:0.3;
+  const pl=LAY.plate;const s=clamp((pl.r-0.06)/Math.max(rm,0.01),0.62,1);
+  G.serveMap={cx,cz,s,tx:pl.x,tz:pl.z};
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.ex[i]=P.x[i];P.ez[i]=P.z[i];P.liftT[i]=0;}
+  for(let k=0;k<CH.n;k++){CH.ox[k]=CH.x[k];CH.oz[k]=CH.z[k];}
+  for(let e=0;e<ED.n;e++)if(ED.alive[e])ED.rest[e]=Math.hypot(P.x[ED.b[e]]-P.x[ED.a[e]],P.z[ED.b[e]]-P.z[ED.a[e]]);
+}
+function serveUpdate(dt){
+  const t=(G.serveT+=dt);
+  if(t<0.75){const u=sstep(0,0.5,t);for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.x[i]=lerp(P.x[i],P.gx[i],Math.min(1,dt*7));P.z[i]=lerp(P.z[i],P.gz[i],Math.min(1,dt*7));P.px[i]=P.x[i];P.pz[i]=P.z[i];}
+    OVEN.door=sstep(0.2,0.8,t);OVEN.warm=sstep(0.3,1.7,t);OVEN.tray=sstep(0.55,1.25,t);return;}
+  if(!G.serveMap)serveMapCompute();
+  const M=G.serveMap;
+  OVEN.door=sstep(0.2,0.8,t);
+  OVEN.warm=sstep(0.3,1.7,t);
+  OVEN.tray=sstep(0.55,1.25,t)*(1-sstep(2.0,2.6,t));
+  if(t>2.0)OVEN.door=1-sstep(2.0,2.6,t);
+  const u=sstep(0.75,1.85,t);const fw=sstep(0.55,1.25,t)*0.18*(1-u);
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+    const tx=M.tx+(P.ex[i]-M.cx)*M.s,tz=M.tz+(P.ez[i]-M.cz)*M.s;
+    P.x[i]=lerp(P.ex[i],tx,u);P.z[i]=lerp(P.ez[i],tz,u)+fw;P.px[i]=P.x[i];P.pz[i]=P.z[i];
+    P.lift[i]=Math.sin(PI*u)*0.11+(1-u)*0.0;P.liftV[i]=0;if(u>=0.999)clampPlate(i,false);}
+  for(let k=0;k<CH.n;k++){const tx=M.tx+(CH.ox[k]-M.cx)*M.s,tz=M.tz+(CH.oz[k]-M.cz)*M.s;CH.x[k]=lerp(CH.ox[k],tx,u);CH.z[k]=lerp(CH.oz[k],tz,u)+fw;}
+  if(t>=1.85&&!G.landed){G.landed=true;emit('land',{x:M.tx,z:M.tz});for(let i=0;i<P.n;i++){if(P.alive[i])clampPlate(i,false);}
+    if(M.s<0.999){for(let q=0;q<TR.n;q++)if(TR.alive[q])TR.vol[q]*=M.s*M.s;}
+    for(let e=0;e<ED.n;e++)if(ED.alive[e])ED.rest[e]=Math.hypot(P.x[ED.b[e]]-P.x[ED.a[e]],P.z[ED.b[e]]-P.z[ED.a[e]]);}
+  if(t>=2.7){G.phase='plate';G.landed=false;G.emptyT=0;
+    for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.lift[i]=0;P.bake[i]=1;P.soft[i]=0;P.bakeR[i]=0;P.layer[i]=P.layer[i];P.sag[i]=0;P.glow[i]=0;}
+    computeDerived();computePieces();anchorCheese();emit('platePhase',{});}
+}
+/* ---- arrival ---- */
+function startArrive(){
+  G.phase='arrive';G.arriveT=0;G.round++;
+  setupDough(G.outline,true);
+  // remember final positions & compact
+  let sx=0,sz=0,c=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;sx+=P.x[i];sz+=P.z[i];c++;}
+  G.arr={cx:sx/c,cz:sz/c,bake:new Float32Array(P.n)};
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.gx[i]=P.x[i];P.gz[i]=P.z[i];G.arr.bake[i]=P.bake[i];P.bake[i]=0;P.soft[i]=1;}
+  for(let k=0;k<CH.n;k++){CH.ox[k]=CH.x[k];CH.oz[k]=CH.z[k];CH.a[k]*=1;}
+  G.arrCheese=CH.n;CH.n=0;
+  arriveUpdate(0);
+  emit('arriveStart',{});
+}
+function arriveUpdate(dt){
+  const t=(G.arriveT+=dt);const A=G.arr;
+  const pop=sstep(0,0.35,t);
+  const spread=t<0.5?0.12*pop:lerp(0.12,1,1-Math.pow(1-sstep(0.5,1.3,t),2))+Math.sin(clamp((t-0.5)/0.8,0,1)*PI*2)*0.04*(1-sstep(1.1,1.5,t));
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+    P.x[i]=A.cx+(P.gx[i]-A.cx)*spread;P.z[i]=A.cz+(P.gz[i]-A.cz)*spread;P.px[i]=P.x[i];P.pz[i]=P.z[i];
+    P.lift[i]=t<0.5?(1-pop)*0.05:0;P.liftV[i]=0;}
+  if(t>0.5&&!A.s1){A.s1=1;emit('arriveLand',{x:A.cx,z:A.cz});}
+  OVEN.door=sstep(0.0,0.35,t)*(1-sstep(1.1,1.7,t));
+  OVEN.warm=1-sstep(1.2,2.3,t);
+  if(t>1.35&&!A.ch){A.ch=1;CH.n=G.arrCheese;emit('cheesePop',{x:A.cx,z:A.cz});}
+  if(t>1.6&&!A.bk){A.bk=1;
+    for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(A.bake[i]>0.5){P.bakeR[i]=0.9;}else{P.bake[i]=A.bake[i];P.bakeR[i]=0;}}
+    BANDS.push({list:Array.from({length:P.n},(_,i)=>i).filter(i=>P.alive[i]&&A.bake[i]>0.5),t:TIME.t,cx:A.cx,cz:A.cz,moved:0,thick:0,done:false,arrival:true});}
+  if(t>1.6){for(let i=0;i<P.n;i++){if(P.alive[i]&&A.bake[i]<=0.5){P.bake[i]=A.bake[i];P.soft[i]=P.bake[i]<0.5?1:0;}}}
+  if(t>2.9){G.phase='oven';for(let i=0;i<P.n;i++){if(!P.alive[i])continue;P.edited[i]=0;P.kind[i]=0;if(P.bake[i]>=0.99)P.soft[i]=0;}
+    for(let e=0;e<ED.n;e++)if(ED.alive[e])ED.rest[e]=Math.hypot(P.x[ED.b[e]]-P.x[ED.a[e]],P.z[ED.b[e]]-P.z[ED.a[e]]);
+    G.inviteEval=0;G.demoArmed=true;G.lastInput=TIME.t;G.ovenTime=0;G.rdone={};G.rto={};G.roundBakes=0;emit('ovenPhase',{});}
+}
+
+/* ================= director: invitation & demo ================= */
+function boundaryList(){const b=[];for(let i=0;i<P.n;i++)if(P.alive[i]&&P.bnd[i])b.push(i);return b;}
+function centroidAll(){let sx=0,sz=0,c=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;sx+=P.x[i];sz+=P.z[i];c++;}return c?[sx/c,sz/c]:[0,0];}
+function cheeseCentroid(){let sx=0,sz=0,c=0;for(let k=0;k<CH.n;k++){if(!CH.alive[k])continue;sx+=CH.x[k]*CH.a[k];sz+=CH.z[k]*CH.a[k];c+=CH.a[k];}return c?[sx/c,sz/c]:null;}
+function roomAt(x,z,dx,dz){ // free distance from point along dir within oven
+  const I=WL.inner;let best=0.5;
+  if(dx>0.01)best=Math.min(best,(I.x1-0.03-x)/dx);if(dx<-0.01)best=Math.min(best,(I.x0+0.03-x)/dx);
+  if(dz<-0.01)best=Math.min(best,(I.z0+0.03-z)/dz);if(dz>0.01)best=Math.min(best,(0.40-z)/dz);
+  return Math.max(0,best);
+}
+function chooseInvite(){
+  if(G.phase==='plate')return choosePlateInvite();
+  if(G.phase!=='oven')return null;
+  const bl=boundaryList();if(!bl.length)return null;
+  const [cx,cz]=centroidAll();
+  const out=(i)=>{let dx=P.x[i]-cx,dz=P.z[i]-cz;const l=Math.hypot(dx,dz)||1;return [dx/l,dz/l];};
+  const want=(k)=>G.rdone[k]!==1&&G.rdone[k]!=='skip';
+  const serveNow=G.ovenTime>300||(!want('d1')&&!want('d2')&&!want('d3')&&!want('d4')&&!want('d5'));
+  // 1. raw boundary (initial tongue)
+  let raw=-1,rb=-1;for(const i of bl){if(P.bake[i]<0.5&&!P.edited[i]){const s=P.x[i];if(s>rb){rb=s;raw=i;}}}
+  if(raw>=0&&G.roundBakes<1&&!serveNow){let d=out(raw);if(roomAt(P.x[raw],P.z[raw],d[0],d[1])<0.09){d=[d[0]*0.45,d[1]*0.45+0.9];const l=Math.hypot(d[0],d[1]);d=[d[0]/l,d[1]/l];}return {i:raw,dir:d,dist:0.075,kind:'tongue'};}
+  const ears=bl.filter(i=>P.kind[i]===1),wings=bl.filter(i=>P.kind[i]===2);
+  const fresh=bl.filter(i=>!P.edited[i]&&P.bake[i]>0.9);
+  const pickFar=(cands,from,minD)=>{let best=-1,bs=-1;for(const i of cands){let md=1e9;for(const f of from){md=Math.min(md,Math.hypot(P.x[i]-P.x[f],P.z[i]-P.z[f]));}
+      const o=out(i);const room=roomAt(P.x[i],P.z[i],o[0],o[1]);const s=Math.min(md,0.6)+room*0.6+(P.z[i]<0.15?0.05:0);if(md>=minD&&s>bs){bs=s;best=i;}}return best;};
+  const pickNear=(cands,to,minD,maxD)=>{let best=-1,bd=1e9;for(const i of cands){const d=Math.hypot(P.x[i]-to[0],P.z[i]-to[1]);if(d>=minD&&d<=maxD&&d<bd){bd=d;best=i;}}return best;};
+  const edited=bl.filter(i=>P.edited[i]);
+  // 2. d1: ear & wing
+  if(!serveNow&&want('d1')){
+    if(!ears.length){const i=pickFar(fresh.length?fresh:bl,edited.length?edited:[],0.0);if(i>=0)return {i,dir:out(i),dist:0.07,kind:'ear'};}
+    if(!wings.length){const e0=ears[0];const c=fresh.length?fresh:bl;const i=pickNear(c,[P.x[e0],P.z[e0]],0.14,0.4);const j=i>=0?i:pickFar(c,ears,0.1);
+      if(j>=0){const o=out(j);const room=roomAt(P.x[j],P.z[j],o[0],o[1]);return {i:j,dir:o,dist:clamp(room*0.9,0.16,0.3),kind:'wing'};}}
+  }
+  // 3. d2: rewind an edited band
+  if(!serveNow&&want('d2')&&edited.length){const i=edited[Math.floor(edited.length/2)];const o=out(i);return {i,dir:[o[0]*0.7-o[1]*0.7,o[1]*0.7+o[0]*0.7],dist:0.1,kind:'rewind'};}
+  // 4. d3: next to a hard ear, sideways
+  if(!serveNow&&want('d3')){const ear=hardEarNear(cx,cz,2);if(ear){
+      const c=bl.filter(i=>!P.kind[i]||P.kind[i]===2);const i=pickNear(c,[ear.x,ear.z],0.10,0.22);
+      if(i>=0){let tx=P.x[i]-ear.x,tz=P.z[i]-ear.z;const l=Math.hypot(tx,tz)||1;return {i,dir:[tx/l,tz/l],dist:0.15,kind:'pivot',ear};}}}
+  // 5. d4: pocket
+  if(!serveNow&&want('d4')){
+    if(POCKET.inflated){// open seam
+      let best=-1,bd=1e9;for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1||ED.wk[e]!==1)continue;const a=ED.a[e];const d=Math.hypot(P.x[a]-POCKET.cx,P.z[a]-POCKET.cz);if(d<bd){bd=d;best=P.layer[a]?a:ED.b[e];}}
+      if(best>=0){let dx=P.x[best]-POCKET.cx,dz=P.z[best]-POCKET.cz;const l=Math.hypot(dx,dz)||1;return {i:best,dir:[dx/l,dz/l],dist:0.16,kind:'open'};}}
+    else{const cc=cheeseCentroid();if(cc){const i=pickNear(bl,cc,0.04,0.5);if(i>=0){let dx=cc[0]-P.x[i],dz=cc[1]-P.z[i];const l=Math.hypot(dx,dz)||1;return {i,dir:[dx/l,dz/l],dist:Math.min(0.42,l+0.11),kind:'pocket'};}}}
+  }
+  // 6. d5: ring - two tips
+  if(!serveNow&&want('d5')&&RING.has&&G.rdone.d5a===1){
+    let best=-1,bs=-1;for(const i of bl){const dh=Math.hypot(P.x[i]-RING.cx,P.z[i]-RING.cz);if(dh>0.16)continue;const dc=Math.hypot(P.x[i]-cx,P.z[i]-cz);if(dc>bs){bs=dc;best=i;}}
+    if(best>=0){let dx=P.x[best]-RING.cx,dz=P.z[best]-RING.cz;const l=Math.hypot(dx,dz)||1;const room=roomAt(P.x[best],P.z[best],dx/l,dz/l);
+      if(room>0.08)return {i:best,dir:[dx/l,dz/l],dist:Math.min(0.16,room*0.8),kind:'ringpull'};}}
+  if(!serveNow&&want('d5')){
+    const tips=[];for(const i of bl){if(!P.kind[i])continue;const o=out(i);const r=Math.hypot(P.x[i]-cx,P.z[i]-cz);tips.push([i,r]);}
+    tips.sort((a,b)=>b[1]-a[1]);
+    if(tips.length){const a=tips[0][0];let b=-1,bd=1e9;for(const i of bl){const d=Math.hypot(P.x[i]-P.x[a],P.z[i]-P.z[a]);if(d>0.16&&d<0.45&&d<bd){
+          const o1=out(i);const o2=out(a);if(o1[0]*o2[0]+o1[1]*o2[1]>0.2){bd=d;b=i;}}}
+      if(b>=0){let dx=P.x[a]-P.x[b],dz=P.z[a]-P.z[b];const l=Math.hypot(dx,dz)||1;const o=out(b);return {i:b,dir:[dx/l*0.8+o[0]*0.3,dz/l*0.8+o[1]*0.3],dist:l*0.95,kind:'ring'};}}
+  }
+  // 7. serve
+  let fr=-1,fz=-1e9;for(const i of bl){if(P.z[i]>fz&&Math.abs(P.x[i])<0.5){fz=P.z[i];fr=i;}}
+  if(fr>=0){const pl=LAY.plate;let dx=pl.x-P.x[fr],dz=pl.z-P.z[fr];const l=Math.hypot(dx,dz)||1;return {i:fr,dir:[dx/l,dz/l],dist:l*0.62,kind:'serve'};}
+  return null;
+}
+function choosePlateInvite(){
+  if(!PIECES.length)return null;
+  let big=null;for(const pc of PIECES){pieceStats(pc);if(!big||pc.area>big.area)big=pc;}
+  if(!big)return null;
+  // farthest boundary point from centroid
+  let best=-1,bd=-1;for(const i of big.list){if(!P.bnd[i])continue;const d=Math.hypot(P.x[i]-big.cx,P.z[i]-big.cz);if(d>bd){bd=d;best=i;}}
+  if(best<0)return null;
+  let dx=P.x[best]-big.cx,dz=P.z[best]-big.cz;const l=Math.hypot(dx,dz)||1;
+  for(const pc of PIECES){if(pc===big||pc.area<0.07||pc.list.some(i=>P.eat[i]))continue;
+    let c=pc.list[0],cd=1e9;for(const i of pc.list){const d=Math.hypot(P.x[i]-pc.cx,P.z[i]-pc.cz);if(d<cd){cd=d;c=i;}}
+    const dx=LAY.dogZone.x-P.x[c],dz=LAY.dogZone.z-P.z[c];const l=Math.hypot(dx,dz)||1;return {i:c,dir:[dx/l,dz/l],dist:Math.min(0.5,l),kind:'share'};}
+  return {i:best,dir:[dx/l,dz/l],dist:0.08,kind:'snap'};
+}
+function inviteUpdate(dt){
+  G.inviteEval-=dt;
+  if(G.inviteEval<=0&&!DRAG.active){G.inviteEval=1.2;const prev=G.invite;const nv=chooseInvite();
+    if(nv&&prev&&prev.kind===nv.kind&&P.alive[prev.i]&&Math.hypot(P.x[prev.i]-P.x[nv.i],P.z[prev.i]-P.z[nv.i])<0.12){G.invite=prev;prev.dir=nv.dir;prev.dist=nv.dist;}else{G.invite=nv;G.invDecay=0.6;GF.forceFrames=45;if(nv)G.inviteT=0;}}
+  const inv=G.invite;
+  if(inv&&G.phase==='oven'){const key={ear:'d1',wing:'d1',rewind:'d2',pivot:'d3',pocket:'d4',open:'d4',ring:'d5',ringpull:'d5'}[inv.kind];
+    if(key&&TIME.t-G.lastInput<20){G.rto[key]=(G.rto[key]||0)+dt;if(G.rto[key]>40&&G.rdone[key]!==1){G.rdone[key]='skip';G.inviteEval=0;}}}
+  for(let i=0;i<P.n;i++){P.sag[i]*=0.85;P.glow[i]*=0.85;}
+  G.inviteAnim=G.invDecay>0;if(G.invDecay>0)G.invDecay-=dt;
+  if(!inv||!P.alive[inv.i]||DRAG.active||(G.phase!=='oven'&&G.phase!=='plate'))return;
+  G.inviteT+=dt;const ph=(G.inviteT%2.6)/0.95;const pulse=ph<1?Math.pow(Math.sin(ph*PI),2):0;G.inviteAnim=ph<1.45||G.inviteT<0.6;
+  const ax=P.x[inv.i],az=P.z[inv.i];
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const d=Math.hypot(P.x[i]-ax,P.z[i]-az);if(d>0.11)continue;const f=1-d/0.11;
+    if(G.phase==='oven'){P.sag[i]=-0.013*pulse*f*f+0.004*f;}else P.sag[i]=0.006*pulse*f;
+    P.glow[i]=Math.max(P.glow[i],(0.35+0.65*pulse)*f*0.8);}
+}
+const DEMO={active:false,t:0,inv:null,started:false,released:false,sx:0,sz:0};
+function demoMaybe(){
+  if(DEMO.active||DRAG.active||!G.demoArmed||PTR.id!==-1)return;
+  if(G.phase!=='oven'&&G.phase!=='plate')return;
+  if(TIME.t-G.lastInput<4.0||TIME.t-G.lastDemo<12)return;
+  const inv=G.invite;if(!inv||!P.alive[inv.i])return;
+  DEMO.active=true;DEMO.t=0;DEMO.inv={i:inv.i,dir:inv.dir.slice(),dist:inv.dist,kind:inv.kind,x:P.x[inv.i],z:P.z[inv.i]};DEMO.started=false;DEMO.released=false;
+  G.demoArmed=false;G.lastDemo=TIME.t;HAND.on=true;HAND.a=0;
+}
+function demoUpdate(dt){
+  if(!DEMO.active){HAND.a=Math.max(0,HAND.a-dt*4);if(HAND.a<=0)HAND.on=false;return;}
+  DEMO.t+=dt;const t=DEMO.t;const I=DEMO.inv;
+  let dist=I.dist;if(I.kind==='serve')dist=Math.min(dist,0.4);
+  if(G.phase==='plate'&&I.kind==='snap')dist=0.045;
+  const p0x=I.x,p0z=I.z;
+  const k=sstep(0.75,1.95,t);
+  const gx=p0x+I.dir[0]*dist*k,gz=p0z+I.dir[1]*dist*k;
+  let hx=gx,hz=gz;
+  if(t<0.75){const u=sstep(0,0.75,t);hx=p0x-0.04*(1-u);hz=p0z+0.32*(1-u);HAND.a=u;}
+  else if(t>2.1){const u=sstep(2.1,2.8,t);hx=gx-0.03*u;hz=gz+0.3*u;HAND.a=1-u;}
+  else HAND.a=1;
+  HAND.x=hx;HAND.z=hz;HAND.y=sampleGrid(GF.y,hx,hz)||supportY(hx,hz)+0.03;
+  HAND.press=t>0.6&&t<2.05?sstep(0.6,0.75,t):0;
+  HAND.yaw=clamp(Math.atan2(-I.dir[0],-I.dir[1])*0.35,-0.6,0.6);
+  if(t>=0.75&&!DEMO.started){DEMO.started=true;
+    const sc=worldToScreen(p0x,supportY(p0x,p0z)+0.03,p0z);
+    if(beginAt(sc[0],sc[1],true)){DRAG.demo=true;}else{DEMO.active=false;}}
+  if(DEMO.started&&!DEMO.released&&DRAG.active&&DRAG.demo){DRAG.G[0]=gx;DRAG.G[1]=gz;DRAG.fingerMax=Math.max(DRAG.fingerMax||0,Math.hypot(gx-DRAG.G0[0],gz-DRAG.G0[1]));DRAG.D[0]=gx-DRAG.G0[0];DRAG.D[1]=gz-DRAG.G0[1];}
+  if(t>=1.95&&!DEMO.released){DEMO.released=true;if(DRAG.active&&DRAG.demo)endDrag(I.kind==='serve');}
+  if(t>=2.8){DEMO.active=false;}
+}
+function cancelDemo(){if(!DEMO.active)return;if(DRAG.active&&DRAG.demo)endDrag(true);DEMO.active=false;HAND.a=0;HAND.on=false;}
+
+/* ================= dog behaviour ================= */
+function dogUpdate(dt){
+  const d=DOG;d.x=LAY.dog.x;d.z=LAY.dog.z;d.yaw=LAY.dog.yaw;
+  d.breath+=dt*2.6;
+  d.blinkT-=dt;if(d.blinkT<=0){d.blink=1;d.blinkT=2+rnd()*3.5;}d.blink=Math.max(0,d.blink-dt*7);
+  d.happy=Math.max(0,d.happy-dt*0.25);d.wag=0.25+d.happy*1.2;d.wagP+=dt*(5+d.happy*12);
+  d.perk=Math.max(0,d.perk-dt*0.8);
+  // look target
+  let L=null;
+  if(d.eating){L=[d.eating.cx,0.05,d.eating.cz];}
+  else if(DRAG.active){const a=DRAG.anchor;if(P.alive[a])L=[P.x[a],sampleGrid(GF.y,P.x[a],P.z[a])||0.2,P.z[a]];}
+  else if(d.lookEvT>0&&d.lookEv){L=d.lookEv;d.lookEvT-=dt;}
+  else if(G.invite&&P.alive[G.invite.i]){const i=G.invite.i;L=[P.x[i],(sampleGrid(GF.y,P.x[i],P.z[i])||0.2),P.z[i]];}
+  else L=[0,0.25,-0.1];
+  const hw=d.headW[1]?d.headW:[d.x,0.33,d.z];
+  const hs=worldToScreen(hw[0],hw[1],hw[2]),ts=worldToScreen(L[0],L[1],L[2]);
+  const sc=Math.max(1,Math.hypot(CAM.cssW,CAM.cssH))/900;
+  const dxs=(ts[0]-hs[0])/sc,dys=(hs[1]-ts[1])/sc;
+  // body faces mostly toward camera; turn head toward the on-screen direction (up on screen -> look up)
+  const fwx=Math.sin(d.yaw); // body facing x (world) ~ screen-right component
+  let yaw=clamp(Math.atan2(dxs,260)-0.0,-0.95,0.95)-d.yaw*0.55;yaw=clamp(yaw,-1.0,1.0);
+  let pitch=-clamp(Math.atan2(dys,240),-0.35,0.85);
+  if(d.eating){yaw*=0.6;pitch=0.25;}
+  d.ty=yaw;d.tp=pitch;
+  d.tiltT=Math.max(0,d.tiltT-dt);d.tr=d.tiltT>0?0.42*Math.sin(Math.min(1,d.tiltT)*PI*0.5+0.5):0;
+  const k=1-Math.pow(0.002,dt);
+  const py=d.hy,pp=d.hp;
+  d.hy=lerp(d.hy,d.ty,k*0.9);d.hp=lerp(d.hp,d.tp,k*0.9);d.hr=lerp(d.hr,d.tr,k*0.7);
+  d.lean=lerp(d.lean,d.leanT,1-Math.pow(0.004,dt));if(!d.eating)d.leanT=0;
+  const hv=(d.hy-py)/Math.max(dt,1e-3);
+  d.earVL+=(-hv*0.08-d.earL*40)*dt-d.earVL*dt*6;d.earL+=d.earVL*dt;d.earVR+=(hv*0.08-d.earR*40)*dt-d.earVR*dt*6;d.earR+=d.earVR*dt;
+  d.earL=clamp(d.earL,-0.6,0.6);d.earR=clamp(d.earR,-0.6,0.6);
+  d.sniff+=dt;d.bob=Math.sin(d.sniff*9)*0.002*(DRAG.active?1:0.3);
+  if(!d.eating)d.jaw=lerp(d.jaw,d.happy>0.6?0.25:0,0.1);
+}
+
+/* ================= input ================= */
+const PTR={id:-1,x:0,y:0,t0:0};
+function pxToWorld(px){ // approx world units per css px near the pizza
+  const a=worldToScreen(0,WL.trayY,-0.1),b=worldToScreen(0.1,WL.trayY,-0.1);return 0.1/Math.max(1,Math.hypot(b[0]-a[0],b[1]-a[1]))*px;}
+function beginAt(cx,cy,demo){
+  const w=screenToSurface(cx,cy,0.035);
+  const tol=Math.max(0.07,pxToWorld(46));
+  let ok=false;
+  if(G.phase==='oven'){ok=ovenBegin(w[0],w[1],tol);}
+  else if(G.phase==='plate'){ok=plateBegin(w[0],w[1],Math.max(0.06,pxToWorld(40)));if(ok){const a=DRAG.anchor;DRAG.off=[P.x[a]-w[0],P.z[a]-w[1]];}}
+  if(ok){DRAG.active=true;DRAG.demo=!!demo;DRAG.t0=TIME.t;
+    const a=DRAG.anchor;DRAG.snapOff=[DRAG.mode==='oven'?w[0]-P.x[a]:0,DRAG.mode==='oven'?w[1]-P.z[a]:0];
+    if(DRAG.mode==='oven'){DRAG.snapOff[0]*=-1;DRAG.snapOff[1]*=-1;}
+    DENT.x=P.x[a];DENT.z=P.z[a];DENT.amt=1;
+    if(DRAG.mode==='oven'){for(const i of DRAG.list){const w=P.w[i];P.liftV[i]+=0.55*w;P.glow[i]=Math.max(P.glow[i],1.2*w);}}
+    GF.forceUpdate=true;
+  }else if(!demo){touchOther(cx,cy,w);}
+  return ok;
+}
+function touchOther(cx,cy,w){
+  const g=screenToSurface(cx,cy,0.0);const pl=LAY.plate;
+  const h=worldToScreen(DOG.headW[0]||LAY.dog.x,DOG.headW[1]||0.34,DOG.headW[2]||LAY.dog.z);
+  if(Math.hypot(cx-h[0],cy-h[1])<pxToWorld(1)*0+70||Math.hypot(g[0]-LAY.dog.x,g[1]-LAY.dog.z)<0.16){DOG.blink=1;DOG.earVL+=3;DOG.earVR-=3;DOG.happy=Math.min(1,DOG.happy+0.15);SND.dog('hmm');return;}
+  if(Math.hypot(g[0]-pl.x,g[1]-pl.z)<pl.r){OVEN.plateWobV+=2.2;SND.clink();return;}
+  const r=screenRay(cx,cy);const top=rayY(r,0.3);
+  if(Math.abs(top[0])<WL.outerX&&top[1]>WL.backZ&&top[1]<WL.frontZ+0.1){OVEN.wobV+=1.6;SND.tapOven();return;}
+  SND.tick();
+}
+function endDrag(cancel){
+  if(!DRAG.active)return;
+  if(DRAG.mode==='oven'){
+    const serve=!cancel&&DRAG.overPlate&&G.phase==='oven';
+    releaseOven(serve);
+    if(serve)startServe();
+  }else if(DRAG.mode==='plate'){releasePlate();}
+  DRAG.active=false;DRAG.demo=false;DRAG.list=[];DRAG.overPlate=false;
+  for(let i=0;i<P.n;i++)P.w[i]=0;
+  SND.stretchOff();SND.rewindOff();SND.creakOff();
+  DENT.amt=Math.min(DENT.amt,0.6);
+}
+function onDown(e){
+  if(e.cancelable)e.preventDefault();
+  SND.unlock();G.lastInput=TIME.t;G.demoArmed=true;
+  if(PTR.id!==-1){if((DRAG.active&&!DRAG.demo)||TIME.t-PTR.t0<0.25)return; /* ignore extra fingers during a drag */ PTR.id=-1;}
+  if(DEMO.active)cancelDemo();
+  if(DRAG.active)endDrag(true);
+  PTR.id=e.pointerId;PTR.x=e.clientX;PTR.y=e.clientY;PTR.t0=TIME.t;
+  try{canvas.setPointerCapture(e.pointerId);}catch(_){}
+  beginAt(PTR.x,PTR.y,false);
+}
+function onMove(e){
+  if(e.pointerId!==PTR.id)return;if(e.cancelable)e.preventDefault();
+  PTR.x=e.clientX;PTR.y=e.clientY;G.lastInput=TIME.t;
+}
+function onUp(e){
+  if(e.pointerId!==PTR.id)return;if(e.cancelable)e.preventDefault();
+  SND.unlock();
+  PTR.x=e.clientX;PTR.y=e.clientY;
+  if(DRAG.active&&!DRAG.demo){updateDragTarget();endDrag(false);}
+  PTR.id=-1;G.lastInput=TIME.t;
+  try{canvas.releasePointerCapture(e.pointerId);}catch(_){}
+}
+function onCancel(e){
+  if(e.pointerId!==PTR.id)return;
+  if(DRAG.active&&!DRAG.demo)endDrag(true);
+  PTR.id=-1;
+}
+function updateDragTarget(){
+  if(!DRAG.active||DRAG.demo)return;
+  const w=screenToSurface(clamp(PTR.x,-200,CAM.cssW+200),clamp(PTR.y,-200,CAM.cssH+200),0.035);
+  if(DRAG.mode==='oven'){const pl=LAY.plate;const toPlate=Math.hypot(w[0]-pl.x,w[1]-pl.z)<pl.r*1.15;
+    if(!toPlate){const I=WL.inner;const cx=clamp(w[0],I.x0+0.03,I.x1-0.03),cz=clamp(w[1],I.z0+0.03,0.58);
+      const ox=w[0]-cx,oz=w[1]-cz;const ol=Math.hypot(ox,oz);if(ol>1e-6){const g=0.06*(1-Math.exp(-ol/0.06));w[0]=cx+ox/ol*g;w[1]=cz+oz/ol*g;}}}
+  DRAG.G[0]=w[0];DRAG.G[1]=w[1];DRAG.fingerMax=Math.max(DRAG.fingerMax||0,Math.hypot(w[0]-DRAG.G0[0],w[1]-DRAG.G0[1]));
+  let sx=0,sz=0;if(DRAG.mode==='oven'&&DRAG.snapOff){const f=sstep(0,0.22,TIME.t-DRAG.t0);sx=-DRAG.snapOff[0]*f;sz=-DRAG.snapOff[1]*f;}
+  DRAG.D[0]=w[0]-DRAG.G0[0]+sx;DRAG.D[1]=w[1]-DRAG.G0[1]+sz;
+  // limit
+  const dm=Math.hypot(DRAG.D[0],DRAG.D[1]);if(dm>1.1){DRAG.D[0]*=1.1/dm;DRAG.D[1]*=1.1/dm;}
+}
+canvas.addEventListener('pointerdown',onDown,{passive:false});
+W.addEventListener('pointermove',onMove,{passive:false});
+W.addEventListener('pointerup',onUp,{passive:false});
+W.addEventListener('pointercancel',onCancel,{passive:false});
+canvas.addEventListener('lostpointercapture',(e)=>{if(e.pointerId===PTR.id){if(DRAG.active&&!DRAG.demo)endDrag(true);PTR.id=-1;}});
+const prevent=(e)=>{if(e.cancelable)e.preventDefault();};
+D.addEventListener('touchstart',prevent,{passive:false});
+D.addEventListener('touchmove',prevent,{passive:false});
+D.addEventListener('touchend',(e)=>{SND.unlock();prevent(e);},{passive:false});
+D.addEventListener('gesturestart',prevent,{passive:false});
+D.addEventListener('gesturechange',prevent,{passive:false});
+D.addEventListener('contextmenu',prevent,{passive:false});
+D.addEventListener('dblclick',prevent,{passive:false});
+D.addEventListener('selectstart',prevent,{passive:false});
+W.addEventListener('wheel',prevent,{passive:false});
+
+/* ================= events -> sound/fx/dog ================= */
+function handleEvents(){
+  while(EV.length){const e=EV.shift();const d=e.data;
+    switch(e.type){
+      case 'press':if(d.baked>0.6)SND.squish(d.thick,true);else SND.squish(d.thick,false);fx(0,d.x,WL.trayY+0.05,d.z,3,0.02);break;
+      case 'release':SND.boing(d.stretch);if(d.tap){SND.toast();}fx(0,d.x,WL.trayY+0.06,d.z,4,0.04);break;
+      case 'baked':{G.roundBakes++;SND.baked(d.kind);fx(3,d.x,WL.trayY+0.07,d.z,d.kind?9:5,0.06);fx(1,d.x,WL.trayY+0.08,d.z,3,0.05);G.bakes++;DOG.happy=Math.min(1,DOG.happy+0.35);G.inviteEval=0;break;}
+      case 'weld':SND.weld(d.wk);fx(0,d.x,WL.trayY+0.06,d.z,3,0.015);if(d.wk===1){DOG.perk=1;}break;
+      case 'unweld':SND.unweld();fx(4,d.x,WL.trayY+0.07,d.z,2,0.02);break;
+      case 'puff':SND.puff();DOG.tiltT=1.8;DOG.lookEv=[d.x,0.3,d.z];DOG.lookEvT=1.6;fx(1,d.x,WL.trayY+0.1,d.z,5,0.05);break;
+      case 'deflate':SND.deflate();fx(4,d.x,WL.trayY+0.09,d.z,14,0.05);fx(1,d.x,WL.trayY+0.1,d.z,4,0.04);DOG.perk=1;break;
+      case 'ring':SND.ring();for(let k=0;k<10;k++){const a=k/10*TAU;fx(3,d.x+Math.cos(a)*0.05,WL.trayY+0.05,d.z+Math.sin(a)*0.05,1,0.005);}DOG.happy=1;DOG.lookEv=[d.x,0.25,d.z];DOG.lookEvT=1.2;break;
+      case 'ringPull':SND.ringPull();break;
+      case 'tear':SND.tear();break;
+      case 'overPlate':SND.plateGlow();break;
+      case 'serveStart':SND.door(true);setTimeout0(()=>{});G.serveSnd=0;break;
+      case 'land':SND.land();fx(2,d.x,0.05,d.z,8,0.15);fx(1,d.x,0.09,d.z,5,0.12);DOG.happy=1;SND.dog('wuf');break;
+      case 'platePhase':SND.serve();break;
+      case 'platePress':SND.platePress();fx(2,d.x,0.05,d.z,2,0.01);break;
+      case 'snap':SND.snap();DOG.perk=1;DOG.lookEv=[d.x,0.05,d.z];DOG.lookEvT=1.0;break;
+      case 'springBack':SND.tok();break;
+      case 'strandBreak':SND.strandBreak();break;
+      case 'smallDrop':SND.tok();DOG.perk=1;break;
+      case 'pieceDrop':SND.tok();break;
+      case 'dogEat':SND.dog('sniff');break;
+      case 'munch':SND.dog('munch');break;
+      case 'eaten':SND.dog('happy');break;
+      case 'arriveStart':SND.arrive();break;
+      case 'arriveLand':SND.spread();fx(0,d.x,WL.trayY+0.06,d.z,10,0.12);break;
+      case 'cheesePop':SND.tok();break;
+      case 'ovenPhase':SND.dog('wuf');break;
+      case 'discover':break;
+    }
+  }
+}
+
+/* ================= update ================= */
+let bgDirty=true;
+let lastWarm=-1,lastTray=-1,lastWob=0;
+function update(dt){
+  for(let i=0;i<P.n;i++){if(P.alive[i]){P.fx[i]=P.x[i];P.fz[i]=P.z[i];}}
+  if(DRAG.active&&!DRAG.demo)updateDragTarget();
+  const ph=G.phase;
+  if(ph==='oven'){
+    G.ovenTime+=dt;
+    if(DRAG.active&&DRAG.mode==='oven')ovenDragUpdate(dt);
+    const baking=bakeUpdate(dt);
+    if(DRAG.active||simAwake>0||baking){
+      const ts0=performance.now();const mv=simOven(dt);PERF.sim=PERF.sim*0.9+(performance.now()-ts0)*0.1;
+      if(DRAG.active||baking)simAwake=0.6;else if(mv<0.0002)simAwake-=dt;else simAwake=Math.max(simAwake,0.3);
+    }
+    computeDerived();
+    pocketUpdate(dt);
+    if(G.retract>0&&!DRAG.active){G.retract-=dt;simAwake=Math.max(simAwake,0.3);let moved=false;
+      for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const tz=Math.min(P.z[i],0.58),tx=P.z[i]>0.43?clamp(P.x[i],-0.53,0.53):P.x[i];
+        if(tz!==P.z[i]||tx!==P.x[i]){const k=Math.min(1,dt*9);P.x[i]+=(tx-P.x[i])*k;P.z[i]+=(tz-P.z[i])*k;P.px[i]=P.x[i];P.pz[i]=P.z[i];moved=true;}}
+      if(!moved||G.retract<=0){G.retract=0;for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;const a=ED.a[e],b=ED.b[e];if(P.z[a]>0.4||P.z[b]>0.4)ED.rest[e]=Math.min(ED.rest[e],Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a])*1.02);}}}
+    if(RING.checkAt&&TIME.t>RING.checkAt){RING.checkAt=0;ringCheck();}
+    if(RING.expand>0&&!DRAG.active){RING.expand-=dt;simAwake=Math.max(simAwake,0.3);
+      for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const dx=P.x[i]-RING.ex,dz=P.z[i]-RING.ez;const d=Math.hypot(dx,dz);if(d>0.13||d<1e-4)continue;
+        const f=(1-sstep(0.04,0.13,d))*0.075*dt;P.x[i]+=dx/d*f;P.z[i]+=dz/d*f;P.px[i]=P.x[i];P.pz[i]=P.z[i];}
+      for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;const a=ED.a[e];if(Math.abs(P.x[a]-RING.ex)+Math.abs(P.z[a]-RING.ez)>0.2)continue;ED.rest[e]=Math.hypot(P.x[ED.b[e]]-P.x[a],P.z[ED.b[e]]-P.z[a]);}
+      if(RING.expand<=0)RING.checkAt=TIME.t+0.1;}
+    if(RING.has&&TIME.t-RING.lastCheck>0.8){ringCheck();}
+    G.lastChMove=cheeseUpdate(dt,false);
+    LIGHT.glow=lerp(LIGHT.glow,baking?1:0,1-Math.pow(0.02,dt));
+    SND.sizzle(clamp(baking/40,0,1)*LIGHT.glow);
+    DIAL.vel+=(baking?2.2:0)*dt*3;
+    OVEN.plateGlow=lerp(OVEN.plateGlow,DRAG.active&&DRAG.overPlate?1:0,1-Math.pow(0.01,dt));
+  }else if(ph==='serve'){
+    bakeUpdate(dt);computeDerived();serveUpdate(dt);LIGHT.glow=lerp(LIGHT.glow,0.6,0.05);SND.sizzle(0.3);
+    OVEN.plateGlow=lerp(OVEN.plateGlow,0,0.05);
+  }else if(ph==='plate'){
+    SND.sizzle(0);LIGHT.glow=lerp(LIGHT.glow,0,0.05);
+    if(DRAG.active&&DRAG.mode==='plate')plateDragUpdate(dt);
+    dogEatUpdate(dt);
+    for(let k=DOGQ.length-1;k>=0;k--){const q=DOGQ[k];if(TIME.t>=q.t&&!DOG.eating){DOGQ.splice(k,1);if(P.alive[q.pid]&&!(DRAG.active&&DRAG.rigid&&P.piece[DRAG.rigid.a]===P.piece[q.pid])){const pc=PIECES[P.piece[q.pid]];if(pc){pieceStats(pc);if(q.force||pc.area<0.07||(PIECES.length===1&&pc.area<0.12))dogEat(pc,!!q.force);}}}}
+    computeDerived();
+    cheeseUpdate(dt,true);
+    G.leftT=(G.leftT||0)+dt;
+    if(G.leftT>0.7&&!DOG.eating&&!DOGQ.length){G.leftT=0;const dragP=DRAG.active&&DRAG.rigid?P.piece[DRAG.rigid.a]:-1;
+      for(const pc of PIECES){if(pc.id===dragP)continue;pieceStats(pc);if(pc.area<0.07||(PIECES.length===1&&pc.area<0.12)){DOGQ.push({t:TIME.t+0.9,pid:pc.list[0]});break;}}}
+    if(P.cnt===0&&!DOG.eating&&!DRAG.active){G.emptyT+=dt;if(G.emptyT>1.1)startArrive();}
+  }else if(ph==='arrive'){
+    bakeUpdate(dt);arriveUpdate(dt);computeDerived();
+    LIGHT.glow=lerp(LIGHT.glow,G.arriveT>1.6?1:0,0.08);SND.sizzle(G.arriveT>1.6?0.6:0);DIAL.vel+=(G.arriveT>1.6?2.2:0)*dt*3;
+  }
+  // lift spring
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(ph==='serve'||(ph==='plate'&&P.eat[i])||ph==='arrive')continue;
+    const tgt=P.liftT[i];P.liftV[i]+=((tgt-P.lift[i])*90-P.liftV[i]*9)*dt;P.lift[i]+=P.liftV[i]*dt;}
+  for(let i=0;i<P.n;i++){if(P.alive[i]&&P.crack[i]>0&&!(DRAG.active&&DRAG.mode==='plate'))P.crack[i]=Math.max(0,P.crack[i]-dt*2);}
+  DENT.amt=DRAG.active?Math.max(DENT.amt*Math.pow(0.5,dt*2),DRAG.press):Math.max(0,DENT.amt-dt*2.5);
+  if(DRAG.active&&DRAG.mode==='oven'&&P.alive[DRAG.anchor]){DENT.x=P.x[DRAG.anchor];DENT.z=P.z[DRAG.anchor];}
+  inviteUpdate(dt);
+  demoMaybe();demoUpdate(dt);
+  const forced=GF.forceUpdate||GF.forceFrames>0;
+  if(GF.forceFrames>0)GF.forceFrames--;
+  let fd=GF.forceUpdate||GF.forceFrames>0||DRAG.active||G.phase==='serve'||G.phase==='arrive'||simAwake>0||DENT.amt>0||!!DOG.eating;
+  if(!fd){for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(Math.abs(P.liftV[i])>1e-4||P.bakeR[i]>0||P.crack[i]>0||(P.air[i]>0&&P.air[i]<1)){fd=true;break;}}}
+  if(!fd&&G.lastChMove>0.00005)fd=true;
+  GF.forceUpdate=false;
+  PERF.why=(GF.forceUpdate?'F':'')+(G.inviteAnim?'I':'')+(DRAG.active?'D':'')+(simAwake>0?'S':'')+(DENT.amt>0?'d':'')+(LIGHT.glow>0.01?'G':'')+(STR.length?'s':'');
+  G.fieldTick=(G.fieldTick||0)+1;
+  if(fd&&PERF.fld>4.5&&!forced&&(G.fieldTick&1)&&G.phase!=='serve'&&G.phase!=='arrive'){fd=false;GF.didUpdate=false;}
+  if(fd){const t0=performance.now();updateField();PERF.fld=PERF.fld*0.9+(performance.now()-t0)*0.1;GF.didUpdate=true;}
+  else if(G.inviteAnim&&G.invite&&P.alive[G.invite.i]){const pr=inviteRect();if(pr){updateField(pr);GF.didUpdate=true;}else GF.didUpdate=false;}else{GF.didUpdate=false;PERF.fieldSkips++;}
+  strandUpdate(dt);fxUpdate(dt);
+  dogUpdate(dt);
+  // dial
+  DIAL.vel*=Math.pow(0.08,dt);const pa=DIAL.ang;DIAL.ang+=DIAL.vel*dt;
+  if(Math.floor(DIAL.ang/0.26)!==Math.floor(pa/0.26))SND.dialTick(DIAL.vel>0?1:-1);
+  // oven wobble & light
+  OVEN.wobV+=(-OVEN.wob*120-OVEN.wobV*9)*dt;OVEN.wob+=OVEN.wobV*dt;
+  OVEN.plateWobV+=(-OVEN.plateWob*140-OVEN.plateWobV*8)*dt;OVEN.plateWob+=OVEN.plateWobV*dt;
+  LIGHT.warm=OVEN.warm;
+  const bgc=[0.40,0.48,0.58],wc=[1.0,0.70,0.40];
+  for(let c=0;c<3;c++)LIGHT.oven[c]=lerp(bgc[c],wc[c],LIGHT.warm)*(0.9+0.15*LIGHT.glow);
+  if(Math.abs(LIGHT.warm-lastWarm)>0.002||Math.abs(OVEN.tray-lastTray)>0.0005||Math.abs(OVEN.wob)>0.0004||Math.abs(OVEN.plateWob)>0.0004||lastWob){bgDirty=true;}
+  lastWob=(Math.abs(OVEN.wob)>0.0004||Math.abs(OVEN.plateWob)>0.0004)?1:0;
+  lastWarm=LIGHT.warm;lastTray=OVEN.tray;
+  handleEvents();
+}
+function ringCheck(){
+  RING.lastCheck=TIME.t;
+  const h=detectHoles();
+  let has=!!(h&&h.cnt>=(RING.has?4:7));
+  if(!has&&RING.has&&TIME.t-(RING.seenT||0)<1.2)has=true;else if(has)RING.seenT=TIME.t;
+  if(has&&!RING.has){RING.cx=h.x;RING.cz=h.z;RING.area=h.cnt;
+    let joins=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&ED.type[e]===1&&ED.wk[e]===2)joins++;
+    if(joins){emit('ring',{x:h.x,z:h.z});achieve('d5a','ring hole '+h.cnt);RING.expand=0.7;RING.ex=h.x;RING.ez=h.z;}}
+  RING.has=has;if(has&&h&&h.cnt){RING.cx=h.x;RING.cz=h.z;RING.cells=h.cells;}else if(!has)RING.cells=null;
+}
+
+/* ================= render ================= */
+const BG={fbo:null,tex:null,rb:null,w:0,h:0,ok:false};
+function makeFBO(){
+  try{
+    if(BG.fbo){gl.deleteFramebuffer(BG.fbo);gl.deleteTexture(BG.tex);gl.deleteRenderbuffer(BG.rb);}
+    BG.w=canvas.width;BG.h=canvas.height;
+    BG.tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,BG.tex);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,BG.w,BG.h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    BG.rb=gl.createRenderbuffer();gl.bindRenderbuffer(gl.RENDERBUFFER,BG.rb);gl.renderbufferStorage(gl.RENDERBUFFER,gl.DEPTH_COMPONENT16,BG.w,BG.h);
+    BG.fbo=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,BG.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,BG.tex,0);gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,BG.rb);
+    BG.ok=gl.checkFramebufferStatus(gl.FRAMEBUFFER)===gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+  }catch(e){BG.ok=false;}
+  bgDirty=true;
+}
+const MO=M4.create(),MT=M4.create();
+function ovenM(out){M4.ident(out);if(OVEN.wob){M4.translate(out,0,0,0.5);M4.rotX(out,OVEN.wob*0.02);M4.translate(out,0,0,-0.5);}return out;}
+function drawBackground(){
+  gl.clearColor(0.16,0.11,0.08,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+  setFrameUniforms(PR.std);
+  drawMesh(MESH.table,IDM,MAT.wood);
+  // blob shadows
+  setFrameUniforms(PR.blob);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+  drawBlob(0,-0.13,0.92,0.74,0.62,0.22,true);
+  drawBlob(0,-0.13,0.84,0.67,0.35,0.06,true,0.002);
+  drawBlob(LAY.plate.x+0.03,LAY.plate.z+0.02,LAY.plate.r*1.12,LAY.plate.r*1.12,0.40,0.35,false);
+  gl.depthMask(true);gl.disable(gl.BLEND);
+  setFrameUniforms(PR.std);
+  ovenM(MO);
+  drawMesh(MESH.shell,MO,MAT.enamel);
+  drawMesh(MESH.lining,MO,MAT.inner);
+  drawMesh(MESH.feet,MO,MAT.copperDk);
+  drawMesh(MESH.rack,MO,MAT.copperDk);
+  M4.copy(MT,MO);M4.translate(MT,0,0,OVEN.tray*0.42);drawMesh(MESH.tray,MT,MAT.steel);
+  M4.ident(MT);M4.translate(MT,LAY.plate.x,0,LAY.plate.z);if(OVEN.plateWob){M4.rotZ(MT,OVEN.plateWob*0.02);}
+  drawMesh(MESH.plate,MT,MAT.plate,{param:[LAY.plate.r,0,0,0]});
+}
+function renderFrame(){
+  const w=canvas.width,h=canvas.height;
+  if(BG.ok&&(BG.w!==w||BG.h!==h))makeFBO();
+  if(BG.ok){
+    if(bgDirty){gl.bindFramebuffer(gl.FRAMEBUFFER,BG.fbo);gl.viewport(0,0,w,h);drawBackground();gl.bindFramebuffer(gl.FRAMEBUFFER,null);bgDirty=false;}
+    gl.viewport(0,0,w,h);gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);
+    useProg(PR.blit);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,BG.tex);gl.uniform1i(PR.blit.u.uTex,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,MESH.fs);setAttribs(1);gl.vertexAttribPointer(0,2,gl.FLOAT,false,8,0);gl.drawArrays(gl.TRIANGLES,0,3);
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.clear(gl.DEPTH_BUFFER_BIT);
+    // depth prime with background solids (cheap shader)
+    setFrameUniforms(PR.depth);gl.colorMask(false,false,false,false);
+    ovenM(MO);drawMesh(MESH.shell,MO,null);M4.ident(MT);M4.translate(MT,LAY.plate.x,0,LAY.plate.z);drawMesh(MESH.plate,MT,null);
+    M4.copy(MT,MO);M4.translate(MT,0,0,OVEN.tray*0.42);drawMesh(MESH.tray,MT,null);
+    gl.colorMask(true,true,true,true);
+  }else{gl.viewport(0,0,w,h);drawBackground();}
+  // coils
+  setFrameUniforms(PR.std);
+  drawMesh(MESH.coil,ovenM(MO),MAT.coil);
+  // dough shadow
+  if(GF.idxCount){
+    setFrameUniforms(PR.dsh);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+    setAttribs(3);bindField(2);
+    const u=PR.dsh.u;
+    const by=G.phase==='plate'?0.022:WL.trayY+0.001;
+    gl.uniform1f(u.uBaseY,by);gl.uniform1f(u.uStr,0.30);
+    // offset via VP trick: shift by light dir in world
+    const VP2=M4.create();M4.copy(VP2,CAM.VP);M4.translate(VP2,0.018,0,0.012);gl.uniformMatrix4fv(u.uVP,false,VP2);
+    gl.drawElements(gl.TRIANGLES,GF.idxCount,gl.UNSIGNED_SHORT,0);
+    gl.uniform1f(u.uStr,0.16);M4.copy(VP2,CAM.VP);M4.translate(VP2,0.04,0,0.03);gl.uniformMatrix4fv(u.uVP,false,VP2);
+    gl.drawElements(gl.TRIANGLES,GF.idxCount,gl.UNSIGNED_SHORT,0);
+    gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+    // dough
+    setFrameUniforms(PR.dough);setAttribs(6);bindField(0);
+    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    gl.drawElements(gl.TRIANGLES,GF.idxCount,gl.UNSIGNED_SHORT,0);
+    gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+  }
+  // cheese strands
+  buildStrandMesh();
+  if(STRM.count){setFrameUniforms(PR.std);const m={vbo:STRM.vbo,ibo:STRM.ibo,count:STRM.count};drawMesh(m,IDM,MAT.cheese);}
+  // dog
+  setFrameUniforms(PR.blob);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+  drawBlob(DOG.x+0.02,DOG.z+0.0,0.17,0.2,0.45,0.6,false,0.002,DOG.yaw);
+  gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+  setFrameUniforms(PR.std);
+  drawDog();
+  // foreground oven parts
+  ovenM(MO);
+  drawMesh(MESH.frame,MO,MAT.enamel);
+  // door
+  M4.copy(MT,MO);M4.translate(MT,0,WL.doorBot,WL.doorZ);M4.rotX(MT,OVEN.door*1.42);
+  drawMesh(MESH.doorFrame,MT,MAT.enamel);drawMesh(MESH.handle,MT,MAT.copper);
+  const doorM=M4.create();M4.copy(doorM,MT);
+  // dials
+  const dm=M4.create();
+  M4.copy(dm,MO);M4.translate(dm,0.36,0.088,WL.frontZ+0.001);drawMesh(MESH.dialPlate,dm,MAT.copperDk);M4.rotZ(dm,-DIAL.ang);drawMesh(MESH.dialBig,dm,MAT.copper);
+  M4.copy(dm,MO);M4.translate(dm,0.525,0.088,WL.frontZ+0.001);M4.scale(dm,0.72,0.72,1);drawMesh(MESH.dialPlate,dm,MAT.copperDk);M4.copy(dm,MO);M4.translate(dm,0.525,0.088,WL.frontZ+0.001);M4.rotZ(dm,DIAL.ang*1.55+0.4);drawMesh(MESH.dialSmall,dm,MAT.copper);
+  // plate glow ring (serve hint feedback)
+  // fx
+  if(FX.n){fxBuild();setFrameUniforms(PR.pt);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+    gl.uniform1f(PR.pt.u.uScale,canvas.height*0.9);gl.bindBuffer(gl.ARRAY_BUFFER,FX.vbo);setAttribs(3);
+    gl.vertexAttribPointer(0,3,gl.FLOAT,false,32,0);gl.vertexAttribPointer(1,4,gl.FLOAT,false,32,12);gl.vertexAttribPointer(2,1,gl.FLOAT,false,32,28);
+    gl.drawArrays(gl.POINTS,0,FX.n);gl.depthMask(true);gl.disable(gl.BLEND);}
+  // glass
+  setFrameUniforms(PR.glass);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+  drawMesh(MESH.topGlass,MO,MAT.glass,{alpha:1});
+  drawMesh(MESH.doorGlass,doorM,MAT.glass,{alpha:1});
+  gl.depthMask(true);gl.disable(gl.BLEND);
+  // plate glow (when dragging dough over the plate)
+  if(OVEN.plateGlow>0.02){setFrameUniforms(PR.blob);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE);gl.disable(gl.DEPTH_TEST);
+    drawBlobGlow(OVEN.plateGlow);gl.enable(gl.DEPTH_TEST);gl.disable(gl.BLEND);}
+  // hand
+  if(HAND.on&&HAND.a>0.01){gl.clear(gl.DEPTH_BUFFER_BIT);setFrameUniforms(PR.std);if(HAND.a<0.98){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);}drawHand();gl.disable(gl.BLEND);}
+}
+function drawBlobGlow(a){
+  BLOBC[0]=1.0;BLOBC[1]=0.72;BLOBC[2]=0.38;
+  drawBlob(LAY.plate.x,LAY.plate.z,LAY.plate.r*0.86,LAY.plate.r*0.86,0.30*a,0.7,false,0.03);
+  BLOBC[0]=0;BLOBC[1]=0;BLOBC[2]=0;
+}
+
+/* ================= resize / loop ================= */
+const PERF={upd:0,ren:0,fieldSkips:0,fld:0,sim:0,why:''};
+let renderScale=1,frameAvg=16,frameCnt=0,lastTs=0,running=true,rafId=0;
+const FIXED=/[?&]fixed/.test(location.search);
+const DTMAX=/[?&]fast/.test(location.search)?0.1:0.05;
+function resize(){
+  readSafe();
+  const cw=Math.max(1,W.innerWidth||D.documentElement.clientWidth||1),ch=Math.max(1,W.innerHeight||D.documentElement.clientHeight||1);
+  const dpr=Math.min(W.devicePixelRatio||1,2)*renderScale;
+  CAM.cssW=cw;CAM.cssH=ch;CAM.dpr=dpr;
+  const nw=Math.max(1,Math.round(cw*dpr)),nh=Math.max(1,Math.round(ch*dpr));
+  if(canvas.width!==nw||canvas.height!==nh){canvas.width=nw;canvas.height=nh;}
+  const asp=cw/ch;const wasPortrait=LAY.portrait;const d=computeLayout(asp,(cw-SAFE.l-SAFE.r)/Math.max(1,ch-SAFE.t-SAFE.b));
+  if(Math.abs(d.dx)+Math.abs(d.dz)>1e-6||Math.abs(d.sr-1)>1e-6||wasPortrait!==LAY.portrait||!GF.sup){
+    if(gl&&MESH.table)buildPlate();
+    if(GF.sup)computeSupportGrid();
+    if(G.phase==='plate'){const pl=LAY.plate;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
+        const ox=P.x[i]-(pl.x-d.dx),oz=P.z[i]-(pl.z-d.dz);P.x[i]=pl.x+ox*d.sr;P.z[i]=pl.z+oz*d.sr;P.px[i]=P.x[i];P.pz[i]=P.z[i];P.ex[i]+=d.dx;P.ez[i]+=d.dz;}
+      for(let k=0;k<CH.n;k++){CH.x[k]=pl.x+(CH.x[k]-(pl.x-d.dx))*d.sr;CH.z[k]=pl.z+(CH.z[k]-(pl.z-d.dz))*d.sr;}}
+    else if(G.phase==='serve'&&G.serveMap){G.serveMap.tx=LAY.plate.x;G.serveMap.tz=LAY.plate.z;G.serveMap.s*=d.sr;}
+  }
+  const dg=LAY.dog;{const pl=LAY.plate;let vx=pl.x-dg.x,vz=pl.z-dg.z;const l=Math.hypot(vx,vz)||1;LAY.dogZone={x:dg.x+vx/l*0.22,z:dg.z+vz/l*0.22,r:0.17};}
+  DOG.x=dg.x;DOG.z=dg.z;DOG.yaw=dg.yaw;
+  fitCamera();
+  bgDirty=true;
+}
+let resizeT=0;
+W.addEventListener('resize',()=>{resize();resizeT=3;});
+W.addEventListener('orientationchange',()=>{setTimeout(resize,60);setTimeout(resize,350);});
+D.addEventListener('visibilitychange',()=>{
+  if(D.hidden){running=false;cancelAnimationFrame(rafId);if(DRAG.active)endDrag(true);if(DEMO.active)cancelDemo();PTR.id=-1;SND.stretchOff&&SND.stretchOff();SND.sizzle(0);SND.suspend();}
+  else{if(!running){running=true;lastTs=0;rafId=requestAnimationFrame(frame);}try{SND.unlock();}catch(e){}}
+});
+W.addEventListener('pagehide',()=>{if(DRAG.active)endDrag(true);});
+W.addEventListener('blur',()=>{if(DRAG.active&&!DRAG.demo){endDrag(true);PTR.id=-1;}});
+W.__errs=[];
+function frame(ts){
+  if(!running)return;
+  rafId=requestAnimationFrame(frame);
+  let dt=lastTs?(ts-lastTs)/1000:0.016;lastTs=ts;if(!(dt>0))dt=0.016;
+  const raw=dt;dt=Math.min(dt,DTMAX);
+  TIME.t+=dt;TIME.dt=dt;
+  try{
+    if(resizeT>0){resizeT-=dt;}
+    const u0=performance.now();update(dt);const u1=performance.now();
+    if(gl&&!gl.isContextLost()){if(GF.didUpdate)uploadField();renderFrame();}
+    PERF.upd=PERF.upd*0.95+(u1-u0)*0.05;PERF.ren=PERF.ren*0.95+(performance.now()-u1)*0.05;
+  }catch(e){if(W.__errs.length<20)W.__errs.push(String(e&&e.stack||e));}
+  // adaptive resolution
+  frameAvg=frameAvg*0.95+raw*1000*0.05;frameCnt++;
+  if(!FIXED&&frameCnt>90){
+    if(frameAvg>26&&renderScale>0.56){renderScale=Math.max(0.55,renderScale-0.15);frameCnt=0;resize();}
+    else if(frameAvg<13&&renderScale<1){renderScale=Math.min(1,renderScale+0.1);frameCnt=0;resize();}
+  }
+}
+function initGLResources(){
+  attribsOn=0;curProg=null;
+  initPrograms();buildScene();initFieldGL();STRM.vbo=null;FX.vbo=null;makeFBO();
+  gl.disable(gl.CULL_FACE);gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+}
+canvas.addEventListener('webglcontextlost',(e)=>{e.preventDefault();},false);
+canvas.addEventListener('webglcontextrestored',()=>{try{initGLResources();bgDirty=true;GF.idxCount=0;GF.uploadAll=true;GF.partial=false;GF.forceFrames=Math.max(GF.forceFrames||0,3);if(!rafId&&running)rafId=requestAnimationFrame(frame);}catch(e){}},false);
+
+function boot(){
+  initLSH();initFieldArrays();
+  resize();
+  if(gl&&!gl.isContextLost()){try{initGLResources();}catch(e){W.__errs.push('init:'+e);}}
+  const m=loadOutline();G.outline=m;
+  setupDough(m,true);
+  G.phase='oven';G.lastInput=0;
+  for(let i=0;i<P.n;i++){if(P.alive[i]){P.fx[i]=P.x[i];P.fz[i]=P.z[i];}}
+  if(!gl){ // no webgl: keep a calm background
+    D.body.style.background='#3a2a1e';return;}
+  rafId=requestAnimationFrame(frame);
+}
+
+/* ================= test hooks (no UI) ================= */
+W.__pizza={
+  get phase(){return G.phase;},
+  disc(){return JSON.parse(JSON.stringify(DISC));},
+  state(){let raw=0,baked=0,l1=0,welds=0,seams=0,joins=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.bake[i]<0.5)raw++;else baked++;if(P.layer[i])l1++;}
+    for(let e=0;e<ED.n;e++)if(ED.alive[e]&&ED.type[e]===1){welds++;if(ED.wk[e]===1)seams++;else joins++;}
+    let ears=0,wings=0;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(P.kind[i]===1)ears++;if(P.kind[i]===2)wings++;}
+    return {phase:G.phase,round:G.round,cnt:P.cnt,tris:TR.cnt,raw,baked,layer1:l1,welds,seams,joins,ears,wings,pieces:PIECES.length,
+      pocket:{air:POCKET.air,sealed:POCKET.sealed,inflated:POCKET.inflated},ring:RING.has,strands:STR.length,cheese:CH.n,
+      dogEating:!!DOG.eating,storeOK:G.storeOK,bakes:G.bakes,invite:G.invite?{kind:G.invite.kind}:null,demo:DEMO.active,
+      scale:renderScale,hand:+HAND.a.toFixed(2),frameAvg:Math.round(frameAvg*10)/10,upd:+PERF.upd.toFixed(2),ren:+PERF.ren.toFixed(2),skips:PERF.fieldSkips,fld:+PERF.fld.toFixed(2),sim:+PERF.sim.toFixed(2),why:PERF.why,awake:+simAwake.toFixed(2),audio:SND.state,errs:W.__errs.slice(),shader:W.__shaderLog||''};},
+  screen(x,z,y){return worldToScreen(x,y==null?supportY(x,z)+0.03:y,z);},
+  boundary(){computeDerived();const out=[];for(let i=0;i<P.n;i++){if(!P.alive[i]||!P.bnd[i])continue;const s=worldToScreen(P.x[i],supportY(P.x[i],P.z[i])+0.03,P.z[i]);
+      out.push({i,x:P.x[i],z:P.z[i],sx:s[0],sy:s[1],bake:P.bake[i],kind:P.kind[i],edited:P.edited[i],layer:P.layer[i],thick:P.thick[i],h:P.hR[i]});}return out;},
+  particles(){const out=[];for(let i=0;i<P.n;i++){if(!P.alive[i])continue;out.push([i,+P.x[i].toFixed(4),+P.z[i].toFixed(4),+P.bake[i].toFixed(3),P.kind[i],P.layer[i],+P.hR[i].toFixed(4),P.piece[i]]);}return out;},
+  cheese(){const o=[];for(let k=0;k<CH.n;k++)if(CH.alive[k])o.push([+CH.x[k].toFixed(4),+CH.z[k].toFixed(4),+CH.a[k].toFixed(2)]);return o;},
+  invite(){const v=G.invite;if(!v||!P.alive[v.i])return null;const s=worldToScreen(P.x[v.i],supportY(P.x[v.i],P.z[v.i])+0.03,P.z[v.i]);return {kind:v.kind,i:v.i,x:P.x[v.i],z:P.z[v.i],sx:s[0],sy:s[1],dir:v.dir,dist:v.dist};},
+  plate(){const pl=LAY.plate;const s=worldToScreen(pl.x,0.03,pl.z);return {x:pl.x,z:pl.z,r:pl.r,sx:s[0],sy:s[1]};},
+  dog(){const h=DOG.headW;const s=worldToScreen(h[0],h[1],h[2]);return {sx:s[0],sy:s[1],x:h[0],y:h[1],z:h[2],eating:!!DOG.eating};},
+  pieces(){return PIECES.map(pc=>{pieceStats(pc);const s=worldToScreen(pc.cx,0.04,pc.cz);return {n:pc.list.length,area:pc.area,cx:pc.cx,cz:pc.cz,sx:s[0],sy:s[1]};});},
+  dogZone(){const z=LAY.dogZone;const s=worldToScreen(z.x,0.03,z.z);return {x:z.x,z:z.z,r:z.r,sx:s[0],sy:s[1]};},
+  fieldLine(z){const out=[];const j=Math.round((z-GF.z0)/GF.cs);for(let i=0;i<GF.nx;i+=3){const k=j*GF.nx+i;out.push([+(GF.x0+i*GF.cs).toFixed(3),+GF.y[k].toFixed(4),+GF.vis[k].toFixed(2),+(GF.dynB[k*16]/255).toFixed(2),+(GF.dynB[k*16+3]/170).toFixed(2),+(GF.dynB[k*16+12]/255).toFixed(2)]);}return out;},
+  drag(){return {active:DRAG.active,mode:DRAG.mode,anchor:DRAG.anchor,n:DRAG.list.length,D:DRAG.D,G:DRAG.G,G0:DRAG.G0,demo:DRAG.demo,maxD:DRAG.maxD,over:DRAG.overPlate};},
+  dbgP(i){return {alive:P.alive[i],bake:P.bake[i],bakeR:P.bakeR[i],soft:P.soft[i],inD:P.inD[i],thick:P.thick[i],w:P.w[i],x:P.x[i],z:P.z[i],edited:P.edited[i]};},
+  cap(){const m=captureOutline();return m?m.reduce((a,b)=>a+b,0):0;},
+  rebuild(){const m=captureOutline();if(m)setupDough(m,true);return P.cnt;},
+  dbgMove(){let mx=0,mi=-1;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const m=Math.abs(P.x[i]-P.fx[i])+Math.abs(P.z[i]-P.fz[i]);if(m>mx){mx=m;mi=i;}}return mi<0?null:{mx,mi,x:P.x[mi],z:P.z[mi],bake:P.bake[mi],soft:P.soft[mi],bnd:P.bnd[mi],layer:P.layer[mi]};},
+  dbgReach(){computePieces();const out=[];for(const pc of PIECES){const d=geodesic(pc.list[0],pc);const un=pc.list.filter(p=>d[p]>1e8);
+      const info=un.slice(0,5).map(p=>{let deg=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&(ED.a[e]===p||ED.b[e]===p))deg++;return [p,deg,P.alive[p],P.piece[p]];});out.push({n:pc.list.length,un:un.length,info});}return out;},
+  timeScale:1
+};
+boot();
+})();
+</script>
+</body>
+</html>
