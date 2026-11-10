@@ -850,11 +850,11 @@ function seatKin(s,rel){
   let pullP=0,pen=0;
   if(stationOpen('P')){const ar=Math.abs(rel);pullP=1-smooth(5,14,ar);const ys=surfY('P');
     const h=(L.yLift-ys)*smooth(5.5,14,ar),pc=Math.max(0,1-ar/5.5)*0.10+st.sink*0.095*Math.max(0,1-ar/12);
-    if(ar<16)y=lerp(y,ys+h-pc,1-smooth(12,16,ar));pen=Math.max(0,ys-y);}
+    if(ar<16){y=lerp(y,ys+h-pc,1-smooth(12,16,ar));pen=Math.max(0,ys-y);}}
   let pullQ=0,penQ=0;
   if(st.beta>=172&&stationOpen('Q')){const ar=Math.abs(rel-44);pullQ=1-smooth(5,14,ar);const ys=surfY('Q');
     const h=(L.yLift-ys)*smooth(5.5,14,ar),pc=Math.max(0,1-ar/5.5)*0.10+st.sink*0.095*Math.max(0,1-ar/12);
-    if(ar<16)y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penQ=Math.max(0,ys-y);}
+    if(ar<16){y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penQ=Math.max(0,ys-y);}}
   y-=st.sink*0.04*(1-Math.max(pullP,pullQ));
   if(s.ext<1){r=lerp(1.35,r,s.ext);y=lerp(L.discTop+0.25,y,s.ext);pen=s.ext<0.98?0:pen;penQ=s.ext<0.98?0:penQ;pullP*=s.ext;pullQ*=s.ext;}
   return {r,y,dip:s.ext<0.98?0:dip,pullP,pen,pullQ,penQ};
@@ -863,9 +863,9 @@ function trKin(rel){
   const tr=st.tr;let r=L.Ra,y=L.yLift+0.08,pullP=0,pullQ=0,penP=0,penQ=0;
   if(st.beta>8&&st.beta<172){const fr=smooth(3,11,rel)*(1-smooth(33,41,rel));r=lerp(r,2.3,fr);y+=fr*0.7;}
   if(stationOpen('P')){const ar=Math.abs(rel);pullP=1-smooth(5,14,ar);const ys=surfY('P');const h=(L.yLift-ys)*smooth(5.5,14,ar),pc=Math.max(0,1-ar/5.5)*0.09;
-    if(ar<16)y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penP=Math.max(0,ys-y);}
+    if(ar<16){y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penP=Math.max(0,ys-y);}}
   if(stationOpen('Q')){const ar=Math.abs(rel-44);pullQ=1-smooth(5,14,ar);const ys=surfY('Q');const h=(L.yLift-ys)*smooth(5.5,14,ar),pc=Math.max(0,1-ar/5.5)*0.09;
-    if(ar<16)y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penQ=Math.max(0,ys-y);}
+    if(ar<16){y=lerp(y,ys+h-pc,1-smooth(12,16,ar));penQ=Math.max(0,ys-y);}}
   const tilt=bump(rel,19,11)+bump(rel,64,12);
   y+=tilt*0.75;
   if(tr.ext<1){r=lerp(0.6,r,tr.ext);y=lerp(2.4,y,tr.ext);penP=penQ=0;pullP*=tr.ext;pullQ*=tr.ext;}
@@ -950,6 +950,7 @@ function contactEnd(s,station){
 }
 function stampDrag(s,station){
   station=station||'P';const C=station==='P'?L.P:L.Q,bandUp=station==='P'?L.aPS+90:L.aQS+90;
+  if(station==='P'?!s.printed:!s.printedQ){s.phiRef=st.phi;return;}
   const rel=st.phi-s.phiRef;
   if(Math.abs(rel)<=L.TW){s.tw=rel;return;}
   const sg=sgn(rel);s.phiRef=st.phi-sg*L.TW;s.tw=sg*L.TW;
@@ -1528,7 +1529,7 @@ function demoPath(t){
   if(t==='ring'){const th0=st.th;for(let i=0;i<=24;i++){const a=(th0+L.handleOff+i*4.5)*DEG;pts.push(toScreen([L.D[0]+Math.cos(a)*L.handleR,L.discTop+0.6,L.D[1]+Math.sin(a)*L.handleR]));}}
   else if(t==='paper'){const Mf=M_flap();for(let i=0;i<=24;i++){const a=(PK_A+i*4.5)*DEG,c=Math.cos(st.phi*DEG),s=Math.sin(st.phi*DEG);
     const lx=Math.cos(a)*2.54,lz=Math.sin(a)*2.54;pts.push(toScreen(M4.xp(Mf,[L.S[0]+lx*c-lz*s,0.9,L.S[1]+lx*s+lz*c])));}}
-  else{const k=bknobWorld();for(let i=0;i<=24;i++){const a=(-60+i*9)*DEG;pts.push(toScreen([k[0]+Math.cos(a)*0.42,k[1]+0.75,k[2]+Math.sin(a)*0.42]));}}
+  else{const k=bknobWorld(),dir=st.beta>130?-1:1;for(let i=0;i<=24;i++){const a=(dir>0?-60+i*9:156-i*9)*DEG;pts.push(toScreen([k[0]+Math.cos(a)*0.42,k[1]+0.75,k[2]+Math.sin(a)*0.42]));}}
   return pts;
 }
 function guideUpdate(dt){
@@ -1593,7 +1594,9 @@ function update(dt){
   if(dPhi){paperRotate(dPhi,'user');st._pt=(st._pt||0)+dPhi;if(Math.abs(st._pt)>=20){st._pt=0;SND.click(940,0.03);}}
   // ---- sketchbook flap ----
   if(st.busy<=0){
-    if(st.pendBook){const b0=st.beta;st.beta=clamp(st.beta+st.pendBook*0.55,0,180);st.pendBook=0;if(Math.floor(b0/12)!==Math.floor(st.beta/12))SND.click(480,0.035);}
+    if(st.pendBook){const b0=st.beta,raw=st.beta+st.pendBook*0.55;
+      if((raw>180&&b0>=179.5)||(raw<0&&b0<=0.5)){st.push=(st.push||0)+Math.abs(st.pendBook);if(st.push>80&&G.kind==='book'){st.push=0;st.bSettle=80;st.jig.bknob=1;SND.whoosh();G.kind='done';}}else st.push=0;
+      st.beta=clamp(raw,0,180);st.pendBook=0;if(Math.floor(b0/12)!==Math.floor(st.beta/12))SND.click(480,0.035);}
     if(st.bnudge){const s=st.bnudge*Math.min(1,dt*10);st.beta=clamp(st.beta+s,0,180);st.bnudge-=s;if(Math.abs(st.bnudge)<0.1){st.bnudge=0;settleBook();}}
     if(G.kind!=='book'&&st.bSettle!==null&&!st.bnudge){st.beta=lerp(st.beta,st.bSettle,Math.min(1,dt*7));if(Math.abs(st.beta-st.bSettle)<0.05){st.beta=st.bSettle;if(st.bSettle===80)SND.kotsun(1.05);st.bSettle=null;}}
   }else{st.pendBook=0;}
