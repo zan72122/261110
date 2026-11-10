@@ -9192,11 +9192,11 @@ three/build/three.module.js:
       const skc = [1, 1, 1];
       addEar(gb, model, -1, HEAD_C, skc, B.head);
       addEar(gb, model, 1, HEAD_C, skc, B.head);
-      const NR = 12, NA = 24, nStart = gb.n;
+      const NR = 15, NA = 24, nStart = gb.n;
       const nr = female ? [0.0515, 0.0485] : [0.059, 0.0555];
       for (let j = 0; j <= NR; j++) {
-        const s = j / NR, y = lerp(0.4, 0.555, s);
-        const cz = lerp(-2e-3, 0.01, s);
+        const s = j / NR, y = lerp(0.355, 0.555, s);
+        const cz = lerp(-4e-3, 0.01, sstep(0.4, 0.555, y));
         let bw;
         if (y < 0.43) bw = [B.chest, 1];
         else if (y < 0.48) {
@@ -9208,18 +9208,28 @@ three/build/three.module.js:
         } else bw = [B.head, 1];
         for (let i = 0; i < NA; i++) {
           const a = i / NA * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
-          const flare = 1 + 0.1 * sstep(0.47, 0.42, y);
-          let rx = nr[0] * flare, rz = nr[1] * (1 + 0.04 * sstep(0.47, 0.42, y));
+          const base = sstep(0.455, 0.375, y), fr = sa > 0 ? lerp(0.5, 0.16, sa) : 0.5;
+          const flare = 1 + 0.1 * sstep(0.47, 0.42, y) + fr * base;
+          let rx = nr[0] * flare, rz = nr[1] * (1 + 0.04 * sstep(0.47, 0.42, y) + fr * base * (sa > 0 ? 0.6 : 1));
           let x = ca * rx, z = sa * rz + cz;
           if (sa > 0) {
             z += (female ? 12e-4 : 4e-3) * g1(ca, 0.18) * g1(y - 0.465, 0.02) * sa;
             z += 18e-4 * g1(Math.abs(ca) - 0.55, 0.2) * sa;
           }
-          const ao = (1 - 0.38 * sstep(0.47, 0.525, y) * Math.max(0, sa) - 0.18 * sstep(0.48, 0.53, y)) * (1 - 0.22 * sstep(0.445, 0.4, y)) * (1 - 0.08 * Math.abs(ca));
+          const ao = (1 - 0.38 * sstep(0.47, 0.525, y) * Math.max(0, sa) - 0.18 * sstep(0.48, 0.53, y)) * (1 - 0.18 * sstep(0.445, 0.39, y)) * (1 - 0.08 * Math.abs(ca));
           gb.v(x, y, z, (i + 0.5) / NA, 0.985, [ao, ao * 0.97, ao * 0.97], [0, 0, 0], bw);
         }
       }
       gb.quads(nStart, NA, NR + 1, true, true);
+      {
+        const fr = female ? [0.057, 0.054] : [0.0655, 0.062], fy = 0.428, c0 = gb.n;
+        gb.v(0, fy + 4e-3, -4e-3, 0.5, 0.985, [0.62, 0.6, 0.6], [0, 0, 0], [B.chest, 1]);
+        for (let i = 0; i < NA; i++) {
+          const a = i / NA * Math.PI * 2;
+          gb.v(Math.cos(a) * fr[0], fy - 6e-3 * Math.max(0, Math.sin(a)), Math.sin(a) * fr[1] - 4e-3, (i + 0.5) / NA, 0.985, [0.55, 0.53, 0.53], [0, 0, 0], [B.chest, 1]);
+        }
+        for (let i = 0; i < NA; i++) gb.t(c0, c0 + 1 + (i + 1) % NA, c0 + 1 + i);
+      }
       const g = gb.geometry();
       const nrm = g.attributes.normal.array;
       for (let i = 0; i < nHead * 3; i++) nrm[i] = grid.nrmSets[0][i];
@@ -9765,14 +9775,15 @@ three/build/three.module.js:
       st.headYaw += (yawH + 0.035 * Math.sin(tt * 0.41) - st.headYaw) * kh;
       st.headPitch += (pitchH + 0.02 * Math.sin(tt * 0.29 + 1) - st.headPitch) * kh;
       const pc = -lean * 0.36 * 0.85;
+      const nP = st.headPitch > 0 ? 0.2 : 0.4;
       T.qa.setFromAxisAngle(AX_Y, st.headYaw * 0.4);
-      T.q.setFromAxisAngle(AX_X, -(st.headPitch * 0.4) + pc * 0.4);
+      T.q.setFromAxisAngle(AX_X, -(st.headPitch * nP));
       st.neckQ.copy(st.chestQ).multiply(T.qa).multiply(T.q);
       T.tmp.copy(BIND.neck).sub(BIND.chest).applyQuaternion(st.chestQ).add(st.chestPos);
       setBone(B.neck, T.tmp, st.neckQ);
       T.tmp2.copy(BIND.head).sub(BIND.neck).applyQuaternion(st.neckQ).add(T.tmp);
       T.qa.setFromAxisAngle(AX_Y, st.headYaw * 0.6);
-      T.q.setFromAxisAngle(AX_X, -(st.headPitch * 0.6) + pc * 0.6 + 0.03 * Math.sin(tt * 0.5 + 2) * 0.3);
+      T.q.setFromAxisAngle(AX_X, -(st.headPitch * (1 - nP)) + pc + 0.03 * Math.sin(tt * 0.5 + 2) * 0.3);
       st.headQ.copy(st.neckQ).multiply(T.qa).multiply(T.q);
       setBone(B.head, T.tmp2, st.headQ);
       st.headPos.copy(HEAD_C).sub(BIND.head).multiplyScalar(HSC).applyQuaternion(st.headQ).add(T.tmp2);
@@ -10681,6 +10692,7 @@ vec3 lanternMirror(vec3 nV, vec3 posV) {
     const uRefr = { value: o.refr ?? 0.022 };
     const uTint = { value: new THREE.Color(o.tint ?? 14873842) };
     const uRip = { value: o.ripple ?? 1 };
+    const uEdge = { value: o.edge ?? 0.42 };
     m.userData.uRefr = uRefr;
     m.userData.uTint = uTint;
     m.onBeforeCompile = (sh) => {
@@ -10690,6 +10702,7 @@ vec3 lanternMirror(vec3 nV, vec3 posV) {
       sh.uniforms.uTint = uTint;
       sh.uniforms.uWTime = TIME;
       sh.uniforms.uRip = uRip;
+      sh.uniforms.uEdge = uEdge;
       sh.uniforms.uLant = LANT;
       sh.uniforms.uLantCol = LANT_COL;
       sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nattribute vec2 aW;\nvarying vec2 vW;\nvarying vec2 vRS;\nvarying vec3 vWP;").replace("#include <project_vertex>", `#include <project_vertex>
@@ -10697,7 +10710,7 @@ vec3 lanternMirror(vec3 nV, vec3 posV) {
 	vRS = vec2(projectionMatrix[0][0], projectionMatrix[1][1]) * 0.5 / max(0.05, -mvPosition.z);
 	vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
       sh.fragmentShader = sh.fragmentShader.replace("#include <common>", `#include <common>
-uniform sampler2D uRefract; uniform vec2 uResolution; uniform float uRefr; uniform vec3 uTint; uniform float uWTime; uniform float uRip;
+uniform sampler2D uRefract; uniform vec2 uResolution; uniform float uRefr; uniform vec3 uTint; uniform float uWTime; uniform float uRip; uniform float uEdge;
 varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n	roughnessFactor = mix(roughnessFactor, 0.55, vW.x);").replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
 	if (vW.y > 0.001) {
 		vec2 p = vWP.xz; float t = uWTime; vec2 g = vec2(0.0);
@@ -10719,7 +10732,7 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
 		rc += texture2D(uRefract, suv + off * 1.05 + tx * vec2(-0.6, -0.25)).rgb;
 		rc += texture2D(uRefract, suv + off * 1.09 + tx * vec2(0.25, -0.6)).rgb;
 		rc *= 0.25;
-		float edge = mix(0.42, 1.0, smoothstep(0.0, 0.7, ndv));
+		float edge = mix(uEdge, 1.0, smoothstep(0.0, 0.7, ndv));
 		outgoingLight += rc * uTint * edge * (1.0 - fr);
 		outgoingLight += lanternMirror(normal, -vViewPosition) * fr * 0.9;
 	}
@@ -11514,15 +11527,21 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
     RG.forEach((r, j) => {
       RH[j] = r.h;
     });
-    const HXF = spline([[0, 1.12], [0.04, 1.14], [0.1, 1.2], [0.2, 1.3], [0.33, 1.33], [0.48, 1.27], [0.63, 1.16], [0.78, 1.06], [0.9, 1], [1, 0.98]]);
-    const HZ = spline([[0, 0], [0.015, 0.012], [0.05, 0.042], [0.1, 0.075], [0.2, 0.112], [0.33, 0.128], [0.48, 0.122], [0.63, 0.1], [0.78, 0.066], [0.9, 0.034], [1, 0.012]]);
+    const HXF = spline([[0, 0.74], [0.025, 0.76], [0.06, 0.85], [0.13, 0.97], [0.24, 1.04], [0.36, 1.06], [0.5, 1.03], [0.66, 0.97], [0.82, 0.93], [0.92, 0.94], [1, 1]]);
+    const HZ = spline([[0, 0], [0.025, 6e-3], [0.06, 0.04], [0.13, 0.08], [0.24, 0.103], [0.36, 0.106], [0.5, 0.094], [0.64, 0.072], [0.78, 0.045], [0.9, 0.022], [1, 6e-3]]);
+    const RHS = new Float32Array(nr);
+    const floorHS = [0, 0.025, 0.04, 0.12, 0.2, 0.27, 0.31, 0.33];
+    RG.forEach((r, j) => {
+      RHS[j] = r.kind === 0 ? floorHS[j] : r.kind === 1 ? 0.33 + 0.57 * r.v / DEPTH : 0.9 + 0.1 * (r.v + 1) / 5;
+    });
     const rHX = new Float32Array(nr), rHZ = new Float32Array(nr), rEar = new Float32Array(nr);
     const rSE = new Float32Array(nr);
     for (let j = 0; j < nr; j++) {
-      rHX[j] = HXF(RH[j]);
-      rHZ[j] = HZ(RH[j]);
-      rEar[j] = 0.012 * (1 - smooth3(RH[j] / 0.05));
-      rSE[j] = lerp2(2, 0.9, smooth3(RH[j] / 0.16));
+      const hh = RHS[j];
+      rHX[j] = HXF(hh);
+      rHZ[j] = HZ(hh);
+      rEar[j] = 0.016 * (1 - smooth3(hh / 0.07));
+      rSE[j] = lerp2(2, 0.9, smooth3(hh / 0.16));
     }
     const COS = new Float32Array(nc), SIN = new Float32Array(nc), EAR = new Float32Array(nc);
     for (let i = 0; i < nc; i++) {
@@ -11681,28 +11700,28 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
       F.dy = S2.ry - S2.ly;
       const open = sat(S2.open);
       F.D = BIGBAG.sackDrop * (0.55 + 0.45 * fill) * (1 - 0.12 * open);
-      F.yw = F.my - F.D + F.D * 0.7 * Math.pow(fill, 0.7) + 0.012 * W.heave;
+      F.yw = F.my - F.D + F.D * 0.58 * Math.pow(fill, 0.7) + 0.012 * W.heave;
       F.yBox = levelY(fill);
-      F.blW = smooth3((S2.lift - (1 - 0.3) * 0.45) / 0.55);
+      F.blW = smooth3((S2.lift - (1 - 0.3) * 0.3) / 0.7);
     }
-    const blendOf = (h) => smooth3((S2.lift - (1 - h) * 0.45) / 0.55);
+    const blendOf = (h) => smooth3((S2.lift - (1 - h) * 0.3) / 0.7);
     const _o3 = [0, 0, 0];
     function sackPoint(j, i, o) {
-      const h = RH[j], c = COS[i], s = SIN[i];
+      const h = RHS[j], c = COS[i], s = SIN[i];
       const fill = F.fill, open = sat(S2.open), pour = sat(S2.pour);
-      let hx = F.hs * rHX[j] * (0.9 + 0.1 * fill);
-      let hz = rHZ[j] * (0.42 + 0.58 * Math.sqrt(fill));
+      let hx = F.hs * rHX[j] * (0.86 + 0.14 * fill);
+      let hz = rHZ[j] * (0.4 + 0.6 * Math.sqrt(fill));
       let y = F.my - (1 - h) * F.D;
       y += c * 0.5 * F.dy * h * h;
-      y -= 0.024 * s * s * smooth3((h - 0.86) / 0.14);
-      if (y > F.yw) hz *= lerp2(1, 0.45, smooth3((y - F.yw) / 0.05));
+      y -= 0.062 * s * s * smooth3((h - 0.74) / 0.26) * (0.6 + 0.4 * fill);
+      if (y > F.yw) hz *= lerp2(1, 0.55, smooth3((y - F.yw) / 0.05));
       if (open > 0 && h < 0.16) hz = Math.max(hz, open * 0.075 * (1 - h / 0.16));
       y += rEar[j] * EAR[i] * (1 - open);
       const se = Math.sign(s) * Math.pow(Math.abs(s), rSE[j]);
       const above = smooth3((y - F.yw) / 0.04);
       const corner = Math.pow(Math.abs(c), 4) * smooth3((h - 0.7) / 0.3);
-      hz += (7e-3 * above + 6e-3 * corner) * NZ2[j * NCB + i];
-      hx *= 1 + 0.02 * above * NZ3[j * NCB + i];
+      hz += (0.012 * above + 9e-3 * corner) * NZ2[j * NCB + i];
+      hx *= 1 + 0.035 * above * NZ3[j * NCB + i];
       let x = F.mx + F.ex * hx * c - F.ez * hz * se;
       let z = F.mz + F.ez * hx * c + F.ex * hz * se;
       if (pour > 0 && S2.pourSide) {
@@ -11743,10 +11762,10 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
           }
           if (bl > 0) {
             sackPoint(j, i, _o3);
-            x = lerp2(x, _o3[0], bl) + crum * 0.018 * NZ1[k];
-            y = lerp2(y, _o3[1], bl) + crum * 0.014 * NZ2[k];
-            z = lerp2(z, _o3[2], bl) + crum * 0.018 * NZ3[k];
-            const wr = bl * 35e-4 * (0.4 + (1 - h) * 0.6);
+            x = lerp2(x, _o3[0], bl) + crum * 0.026 * NZ1[k];
+            y = lerp2(y, _o3[1], bl) + crum * 0.02 * NZ2[k];
+            z = lerp2(z, _o3[2], bl) + crum * 0.026 * NZ3[k];
+            const wr = bl * 4e-3 * (0.5 + (1 - h) * 0.5);
             x += wr * NZ2[k];
             z += wr * NZ3[k];
           }
@@ -11765,10 +11784,11 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
       const U = filmMat.userData.uFilm.value;
       const sp2 = smooth3(spread);
       const pk = lerp2(0.025, 1, sp2 * sp2);
-      U.x = lerp2(0.01, 0.04, lift) * pk;
-      U.y = lerp2(0.2, 0.48, lift) * pk;
-      U.z = lerp2(0.3, 0.5, lift) * pk;
-      U.w = lerp2(0.55, 1.5, lift) * pk;
+      U.x = lerp2(0.01, 0.03, lift) * pk;
+      U.y = lerp2(0.2, 0.45, lift) * pk;
+      U.z = lerp2(0.3, 0.55, lift) * pk;
+      U.w = lerp2(0.55, 1.25, lift) * pk;
+      filmMat.normalScale.setScalar(lerp2(0.3, 0.85, lift));
       const show = S2.show && S2.water > 0.02 && S2.open < 0.5;
       water2.visible = !!show;
       if (show) {
@@ -11833,7 +11853,7 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
       }
       if ((dirty || !built) && (group.visible || !built)) rebuild();
     }
-    const SLX = [-0.2, 0.2, 0.6, -0.6, 0.2, -0.2, -0.6, 0.6], SLZ = [0.5, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5];
+    const SLX = [-0.3, 0.3, 0.92, -0.92, 0.36, -0.36, -0.86, 0.86], SLZ = [0.5, -0.5, -0.4, 0.4, 0.5, -0.5, 0.3, -0.3];
     const BOXX = [-0.09, 0.09, 0.27, -0.27, 0.09, -0.09, -0.27, 0.27], BOXZ = [0.42, 0.22, 0.42, 0.22, 0.3, 0.36, 0.3, 0.36];
     const api = {
       group,
@@ -11889,10 +11909,13 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
         frame2();
         const q = clamp3(i | 0, 0, 7);
         const r = 0.034;
-        const hxw = F.hs * 1.15 * (0.9 + 0.1 * F.fill);
-        const yS = Math.max(F.yw + 4e-3, F.my - F.D + r + 0.012);
-        const sx = F.mx + F.ex * SLX[q] * (hxw - r * 0.6) - F.ez * SLZ[q] * 0.068 + W.swx * 0.4;
-        const sz = F.mz + F.ez * SLX[q] * (hxw - r * 0.6) + F.ex * SLZ[q] * 0.068 + W.swz * 0.4;
+        const bot = F.my - F.D;
+        const lower = q >= 4;
+        const yS = lower ? Math.max(F.yw - 0.098, bot + r + 0.022) : Math.max(F.yw - 0.034, bot + r + 0.075);
+        const hw = F.hs * (0.86 + 0.14 * F.fill) - r - 0.012;
+        const dz = 0.032 * (0.5 + 0.5 * Math.sqrt(F.fill));
+        const sx = F.mx + F.ex * SLX[q] * hw - F.ez * SLZ[q] * 2 * dz + W.swx * 0.5;
+        const sz = F.mz + F.ez * SLX[q] * hw + F.ex * SLZ[q] * 2 * dz + W.swz * 0.5;
         const bx = BOXX[q], bz = BOXZ[q], by = F.yBox + 6e-3;
         const b = F.blW;
         return out.set(lerp2(bx, sx, b), lerp2(by, yS, b), lerp2(bz, sz, b));
@@ -11907,7 +11930,7 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
     const filmSmall = makeFilmMaterial({ alpha: 0.016, fres: 0.42, seamAlpha: 0.13, rough: 0.1, wrinkle: 0.55, spec: 1.8, color: 15134198, env: 1.8 });
     const filmHome = makeFilmMaterial({ alpha: 0.018, fres: 0.42, seamAlpha: 0.13, rough: 0.1, wrinkle: 0.6, spec: 1.8, color: 15134198, env: 1.8 });
     const waterSmall = makeWaterMaterial({ refr: 0.011, tint: 14282990 });
-    const waterBig = makeWaterMaterial({ refr: 0.026, tint: 14217194, ripple: 0.45 });
+    const waterBig = makeWaterMaterial({ refr: 0.013, tint: 12182232, ripple: 0.45, edge: 0.72, env: 0.55 });
     let bigN = 0;
     return {
       createSmallBag() {
@@ -15730,7 +15753,8 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
     demo: () => ({ ...vis.demo, idle: vis.idle }),
     activePointer: () => activePointer,
     saveKey: SAVE_KEY,
-    renderInfo: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, dpr })
+    renderInfo: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, dpr }),
+    debugVis: () => ({ meshes: yoyoMeshes.size, poolVisible: yoyoPool.filter((m) => m.group.visible).length, homeVisible: homeYoyos.filter((m) => m && m.group.visible).length, ids: [...yoyoMeshes.keys()], simIds: S.yoyos.map((y) => y.id) })
   };
 })();
 
