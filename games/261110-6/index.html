@@ -123,11 +123,12 @@ const INK=[
 //  storage (all guarded)
 // =====================================================================
 const STORE_KEY='kk-hanataba-261110-6';
-const PNG_RE=/^data:image\/png;base64,[A-Za-z0-9+\/]+={0,2}$/;
+const PNG_RE=/^data:image\/png;base64,(?=iVBORw0KGgo)(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=|[A-Za-z0-9+\/]{4})?$/;
+const okPng=(v)=>typeof v==='string'&&v.length<400000&&(v.length-22)%4===0&&PNG_RE.test(v);
 const store={ok:true,lastErr:null};
 function storeLoad(){
   let raw=null;
-  try{raw=window.localStorage.getItem(STORE_KEY);}catch(e){store.ok=false;store.lastErr='get';return null;}
+  try{raw=window.localStorage.getItem(STORE_KEY);}catch(e){store.ok=false;store.readFailed=true;store.lastErr='get';return null;}
   if(raw===null||raw===undefined||raw==='') return null;
   try{
     const d=JSON.parse(raw);
@@ -137,18 +138,20 @@ function storeLoad(){
     if(typeof d.phi==='number'&&isFinite(d.phi))out.phi=((d.phi%360)+360)%360;
     if(typeof d.plays==='number'&&isFinite(d.plays))out.plays=clamp(Math.floor(d.plays),0,1e6);
     if(Array.isArray(d.memorials))for(const m of d.memorials.slice(0,4)){
-      if(m&&typeof m.f==='string'&&m.f.length<400000&&PNG_RE.test(m.f)&&
-         typeof m.b==='string'&&m.b.length<400000&&PNG_RE.test(m.b))
+      if(m&&okPng(m.f)&&okPng(m.b))
         out.memorials.push({id:String(m.id||('m'+out.memorials.length)).slice(0,40),f:m.f,b:m.b});}
+    if(d.wip&&okPng(d.wip.f)&&okPng(d.wip.b))out.wip={id:String(d.wip.id||'wip').slice(0,40),f:d.wip.f,b:d.wip.b};
     return out;
   }catch(e){store.lastErr='parse';try{window.localStorage.removeItem(STORE_KEY);}catch(e2){}return null;}
 }
 function storeSave(obj){
+  if(store.readFailed){store.ok=false;return false;}
   let o={v:1,order:obj.order.slice(),phi:obj.phi,plays:obj.plays,memorials:obj.memorials.slice(0,4)};
+  if(obj.wip&&okPng(obj.wip.f)&&okPng(obj.wip.b))o.wip={id:String(obj.wip.id).slice(0,40),f:obj.wip.f,b:obj.wip.b};
   for(let tries=0;tries<6;tries++){
     let s;try{s=JSON.stringify(o);}catch(e){store.ok=false;return false;}
     try{window.localStorage.setItem(STORE_KEY,s);store.ok=true;return true;}
-    catch(e){store.lastErr='set';if(o.memorials.length>0){o.memorials=o.memorials.slice(0,o.memorials.length-1);}else{store.ok=false;return false;}}
+    catch(e){store.lastErr='set';if(o.wip){delete o.wip;}else if(o.memorials.length>0){o.memorials=o.memorials.slice(0,o.memorials.length-1);}else{store.ok=false;return false;}}
   }
   store.ok=false;return false;
 }
@@ -377,6 +380,7 @@ function drawImgOn(surf,mapW,img,R,alpha,op,clip){
   if(clip){x.setTransform(1,0,0,1,0,0);x.beginPath();clip(x);x.clip();}
   x.setTransform(m[0],m[1],m[2],m[3],m[4],m[5]);x.globalAlpha=clamp(alpha,0,1);x.globalCompositeOperation=op||'source-over';
   x.drawImage(img,0,0);x.restore();surf.dirty=true;
+  if(surf.kind==='top'&&typeof st!=='undefined')st.cyc.inkVer=(st.cyc.inkVer||0)+1;
 }
 // paint an image onto the stack under a station (top paper with holes + lower layer)
 // returns {top:bool, under:bool(through hole or direct)}
@@ -778,7 +782,7 @@ function draw(m,M,mt){
 //  state (one session) + persistence
 // =====================================================================
 const saved=storeLoad();
-const persist={order:saved?saved.order.slice():[0,1,2,3],phi:saved?saved.phi:0,memorials:saved?saved.memorials.slice():[],plays:saved?saved.plays+1:1};
+const persist={order:saved?saved.order.slice():[0,1,2,3],phi:saved?saved.phi:0,memorials:saved?saved.memorials.slice():[],plays:saved?saved.plays+1:1,wip:saved&&saved.wip?saved.wip:null};
 const memorials=[]; // {id,cf,cb,texF,texB}
 const st={t:0,th:L.aP-5,thV:0,snap:null,nudge:0,sink:0,
   phi:persist.phi,phiV:0,pnudge:0,
@@ -1007,13 +1011,13 @@ function unlock(){
   tlAdd(1.1,0.9,(u)=>{st.tr.emerged=true;st.tr.ext=easeOut(u);},()=>{st.tr.ext=1;SND.kotsun(1.0);});
   tlAdd(2.9,1.0,(u)=>{st.beta=138*(1-easeIO(u));},()=>{st.beta=0;st.peek=false;SND.kotsun(0.85);});
 }
-function captureMemorial(){
+function captureMemorial(noTex){
   const N=256,mk=(src)=>{const c=mkC(N,N),x=c.getContext('2d');
     x.save();x.beginPath();x.arc(N/2,N/2,N/2*L.Rp/(L.Rp+0.03),0,TAU);x.clip();x.drawImage(src.c,0,0,src.N,src.N,0,0,N,N);x.restore();
     return c;};
   const cf=mk(SF.topF),cb=mk(SF.topB),id='m'+Date.now().toString(36)+st.cyc.id;
   const m={id,cf,cb,texF:null,texB:null};
-  if(glOK){m.texF=texFrom(cf,false,true);m.texB=texFrom(cb,false,true);}
+  if(glOK&&!noTex){m.texF=texFrom(cf,false,true);m.texB=texFrom(cb,false,true);}
   let f=null,b=null;try{f=cf.toDataURL('image/png');b=cb.toDataURL('image/png');}catch(e){}
   return {m,f,b};
 }
@@ -1030,7 +1034,7 @@ function complete(){
   const fp=flapPaperCenter();sparkle(fp[0],fp[1],fp[2],16,2.0);
   st.cyc.cap=captureMemorial();st.cyc.after=0;
   // drop the in-progress snapshot of this page and store the finished one right away
-  const wid='w'+st.cyc.id+'_'+(persist.plays||0);persist.memorials=persist.memorials.filter(q=>q.id!==wid);{const wi=memorials.findIndex(q=>q.id===wid);if(wi>=0)dropMemTex(memorials.splice(wi,1)[0]);}
+  const wid='w'+st.cyc.id+'_'+(persist.plays||0);if(persist.wip&&persist.wip.id===wid)persist.wip=null;
   addMemorial(st.cyc.cap,null,false);
   st.busy=2.8;st.glowStand=1;
   const b0=st.beta;tlAdd(0.5,1.0,(u)=>{st.beta=lerp(b0,155,easeIO(u));});
@@ -1627,6 +1631,7 @@ let running=false,rafId=0,lastT=0,perfAcc=0,perfN=0,perfCool=0,perfUpT=-99,perfB
 function frame(ts){
   if(!running)return;
   rafId=requestAnimationFrame(frame);
+  if(st._downT&&!st._downFrameStartT)st._downFrameStartT=performance.now();
   let dt=lastT?(ts-lastT)/1000:0.016;lastT=ts;dt=clamp(dt,0,0.05);
   try{update(dt);}catch(err){st._err=String(err&&err.message||err);}
   try{render();}catch(err){st._errR=String(err&&err.message||err);}
@@ -1650,12 +1655,15 @@ window.addEventListener('resize',()=>{resize();});
 window.addEventListener('orientationchange',()=>{setTimeout(resize,120);});
 function saveWork(){
   // keep the work in progress as "previous memorial page" when the paper has ink
-  try{if(!st.cyc.done&&coverage(SF.topF)>0.01&&!st.sendAside){const cap=captureMemorial();cap.m.id='w'+st.cyc.id+'_'+(persist.plays||0);addMemorial(cap,cap.m.id);}else persistNow();}catch(e){}
+  try{persistNow();}catch(e){}
+  try{if(!st.cyc.done&&st.cyc.prints>0&&!st.sendAside&&st.cyc.inkVer!==st.cyc.savedVer){const cap=captureMemorial(true);
+    if(cap.f&&cap.b){persist.wip={id:'w'+st.cyc.id+'_'+(persist.plays||0),f:cap.f,b:cap.b};st.cyc.savedVer=st.cyc.inkVer;persistNow();}}}catch(e){}
 }
 function loadMemorials(){
-  for(const m of persist.memorials){const rec={id:m.id,cf:null,cb:null,texF:null,texB:null};memorials.push(rec);
+  const list=(persist.wip?[persist.wip]:[]).concat(persist.memorials).slice(0,4);
+  for(const m of list){const rec={id:m.id,cf:null,cb:null,texF:null,texB:null};memorials.push(rec);
     let n=0;const fin=()=>{n++;if(n===2&&glOK){try{rec.texF=texFrom(rec.cf,false,true);rec.texB=texFrom(rec.cb,false,true);}catch(e){}}};
-    const ld=(src,key)=>{const im=new Image();im.onload=()=>{const c=mkC(256,256);c.getContext('2d').drawImage(im,0,0,256,256);rec[key]=c;fin();};im.onerror=()=>{const i=memorials.indexOf(rec);if(i>=0)memorials.splice(i,1);persist.memorials=persist.memorials.filter(q=>q.id!==rec.id);};im.src=src;};
+    const ld=(src,key)=>{const im=new Image();im.onload=()=>{const c=mkC(256,256);c.getContext('2d').drawImage(im,0,0,256,256);rec[key]=c;fin();};im.onerror=()=>{const i=memorials.indexOf(rec);if(i>=0)memorials.splice(i,1);persist.memorials=persist.memorials.filter(q=>q.id!==rec.id);if(persist.wip&&persist.wip.id===rec.id)persist.wip=null;};im.src=src;};
     ld(m.f,'cf');ld(m.b,'cb');}
 }
 function boot(){
