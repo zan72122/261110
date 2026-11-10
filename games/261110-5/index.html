@@ -3908,7 +3908,7 @@ G.util = (function () {
   function jitter(amp) { return (cosmetic() * 2 - 1) * amp; }
   function rand() { return cosmetic(); }
   // dye -> linear RGB of water tint (y = turmeric amount 0..1, b = indigo amount 0..1, as concentrations)
-  var CLEAR = [0.62, 0.70, 0.70], TURM = [0.86, 0.58, 0.06], INDI = [0.06, 0.16, 0.46], GREEN = [0.16, 0.42, 0.20];
+  var CLEAR = [0.62, 0.70, 0.70], TURM = [0.86, 0.58, 0.06], INDI = [0.02, 0.12, 0.25], GREEN = [0.16, 0.42, 0.20];
   function dyeColor(y, b, out) {
     out = out || [0, 0, 0];
     y = clamp(y, 0, 1); b = clamp(b, 0, 1);
@@ -4202,16 +4202,23 @@ G.water = (function () {
     // vortex: the sump sits in the tray's SE corner, so the swirl loop is centred a little up-stream of the drain where a cup
     // can go round inside the channels at any level (clear of the walls and of the island corner). Solid-body swirl.
     vortexX: 0.377, vortexZ: 0.240, vortexRo: 0.028, vortexZone: 0.16, vortexOmega: 2.5, vortexSpring: 2.5,
-    vortexLvl0: 0.014, vortexLvl1: 0.022, vortexLife: 4.8, vortexFade: 1.5, vortexSpinUp: 0.4, vortexSpinDown: 0.4,
+    // FIX(O1/PLAY-1): the swirl belongs to a pond drain (armed when the plug comes out of a pond) and lives while the pond's
+    // water is still running out (level gate, hard cap vortexMaxLife), until the cup has made its one lap; then it fades
+    vortexLvl0: 0.010, vortexLvl1: 0.013, vortexMaxLife: 14, vortexFade: 1.5, vortexSpinUp: 0.4, vortexSpinDown: 0.4,
     vortexDominance: 0.85, airCore: 0.4,
-    suckOpen: 0.88, suckPlugged: 0.75, suckR0: 0.16, suckR1: 0.26,
+    suckOpen: 0.88, suckPlugged: 0.75, suckR0: 0.16, suckR1: 0.26, suckOpenR0: 0.06,
+    // FIX(O1/PLAY-1): surface drift of a draining pond. The free surface converges on the air-core swirl faster than the
+    // depth-averaged current: floating things anywhere on the connected water ride toward the drain along the open-water
+    // route (channels; never climbing a partition), at a speed that follows the real outflow (drain.q) and the level.
+    // Sheltered over the dock cradle; handed over to the swirl near the drain; ends with the lap / when the pond has gone.
+    driftV: 0.21, driftQ: 0.0008, driftLvl0: 0.0115, driftLvl1: 0.016, driftR0: 0.045, driftR1: 0.10, driftVis: 0.6,
     jetA: 1.6, jetRate0: 0.0005, jetLen: 0.16, jetWid: 0.08, jetOffset: 0.06, jetAimR: 0.25, jetAimAngle: 1.75, jetBack: -0.03, jetFacing: 3.0, jetChan: 0.35,
     spoutTau: 0.2, spoutR: 0.022, spoutJet: 0.4, bridgeT: 1.6, bridgeRamp: 0.25,
     hiV0: 0.060, hiMix: 0.002, hiFloor: 0.020, hiVisArea: 1.5,
     boatTau: 0.3, boatSlope: 0.6, uDead: 0.004, slopeDead: 0.002, boatVmax: 0.6,
     footR: 0.02, sampleR: 0.035, keelTau: 0.10, draftTau: 0.35,
     slideV: 0.05, slideDepth: 0.003,
-    cradleMargin: 0.02, cradleK: 8, cradleD: 4, cradleClear: 0.010,
+    cradleMargin: 0.035, cradleK: 8, cradleD: 4, cradleClear: 0.010,   // FIX(O1): catch margin 2 -> 3.5 cm (the drift shelter uses it too)
     bottomFric: 6, bottomClear: 0.003,
     groundDamp: 10,
     dyeDiff: 0.02,
@@ -4236,14 +4243,16 @@ G.water = (function () {
   var tubs = W.tubs = {};
   var spouts = W.spouts = {};
   var bridge = W.bridge = { rim: null, front: 0, flowing: false, q: 0, y: 0, b: 1, t: 0 };
-  var drain = W.drain = { plugged: false, q: 0, head: 0, vortex: 0, open: 0, x: 0, z: 0, swirlX: 0, swirlZ: 0, swirlR: 0.05, dir: -1, overflow: 0, tOpen: 0 };
+  var drain = W.drain = { plugged: false, q: 0, head: 0, vortex: 0, open: 0, x: 0, z: 0, swirlX: 0, swirlZ: 0, swirlR: 0.05, dir: -1, overflow: 0, tOpen: 0,
+                          armed: false, lapDone: false, lapT: 0, drift: 0 };
   var boat = W.boat = {
     x: 0, z: -0.25, vx: 0, vz: 0, yaw: 0, y: 0, surfY: 0, keel: 0, tiltX: 0, tiltZ: 0,
     water: 0, dye: { y: 0, b: 0 }, draft: 0.004, grounded: false, onDock: false,
     region: 2, regionName: 'M', orbit: 0, orbits: 0, clearance: 0, speed: 0, depth: 0, waterY: 0, fill: 0
   };
   var bi = { keel: 0, draftVis: 0.004, cause: null, lastChan: null, crossing: false, pendReg: -1, pendT: 0,
-             bumpT: 0, touching: false, touchT: 0, orbitAcc: 0, orbitTh: null, wobX: 0, wobZ: 0, wobVX: 0, wobVZ: 0, bobT: 0, etaPrev: null, etaRate: 0 };
+             bumpT: 0, touching: false, touchT: 0, orbitAcc: 0, orbitTh: null, wobX: 0, wobZ: 0, wobVX: 0, wobVZ: 0, bobT: 0, etaPrev: null, etaRate: 0,
+             released: false };
 
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
   function emit(evt, data) { evq.push(evt, data); }
@@ -4317,6 +4326,7 @@ G.water = (function () {
       if (U.dist(ccx(i), ccz(j), P.vortexX, P.vortexZ) < P.vortexZone) vortexList.push(j * NX + i);
     }
     buildSlideField();
+    RTX = null; routeKey = '';      // the route field is (re)built by rebuildTB() below
     // tubs
     var LO = L.TUBS.LO, HI = L.TUBS.HI;
     tubs.HI = { id: 'HI', vol: P.hiV0, y: HI.dye.y, b: HI.dye.b, levelY: HI.levelY, levelY0: HI.levelY, area: Math.PI * HI.rIn * HI.rIn };
@@ -4335,6 +4345,7 @@ G.water = (function () {
     var B0 = L.INITIAL.boat;
     placeBoatRaw(B0.x, B0.z, B0.water || 0, B0.dye);
     plugged = !!L.INITIAL.plugged; drain.plugged = plugged;
+    drain.armed = false; drain.lapDone = false; drain.lapT = 0; drain.drift = 0; drain.tOpen = 0; bi.released = false;
     dams.S = false; dams.E = false; rebuildTB();
     pours.length = 0; absorbs.length = 0; evq = []; cbq = [];
     bridge.rim = null; bridge.front = 0; bridge.flowing = false; bridge.q = 0; bridge.y = tubs.HI.y; bridge.b = tubs.HI.b;
@@ -4429,6 +4440,79 @@ G.water = (function () {
     }
   }
 
+  // FIX(O1/PLAY-1) route field for the draining surface drift: unit direction, per cell, along the shortest open-water route
+  // to the swirl loop (Dijkstra over the grid from the cells round the swirl centre). A step onto floor more than 2 mm higher
+  // costs 400 (the drift never carries a cup up over a partition / island / shelf wall), a step where a cup would rub an
+  // obstacle costs 30 (keeps the route in mid-channel). A dam cloth lying at the junction counts as raised floor, so the
+  // route goes round it. Built at init and again whenever a dam is laid / taken (~3600 cells, a few ms).
+  var RTX = null, RTZ = null, routeKey = '';
+  function buildRouteField() {
+    RTX = RTX || new Float32Array(N); RTZ = RTZ || new Float32Array(N); RTX.fill(0); RTZ.fill(0);
+    var c, i, j, rb = C.BOAT_R / CELL, rr2 = Math.ceil(rb), clr = new Uint8Array(N), dist = new Float64Array(N), done = new Uint8Array(N);
+    var TF = new Float64Array(N); for (c = 0; c < N; c++) TF[c] = DAMMASK[c] ? Math.max(T[c], P.damH) : T[c];
+    for (j = 0; j < NZ; j++) for (i = 0; i < NX; i++) {
+      var okc = 1, t0 = TF[j * NX + i] + 0.002;
+      for (var dj = -rr2; dj <= rr2 && okc; dj++) for (var di = -rr2; di <= rr2; di++) {
+        var ex = Math.max(0, Math.abs(di) - 0.5), ez = Math.max(0, Math.abs(dj) - 0.5);
+        if (ex * ex + ez * ez >= rb * rb) continue;
+        var i4 = i + di, j4 = j + dj;
+        if (i4 < 0 || j4 < 0 || i4 >= NX || j4 >= NZ || TF[j4 * NX + i4] > t0) { okc = 0; break; }
+      }
+      clr[j * NX + i] = okc;
+    }
+    // binary heap of [dist, cell]
+    var hd = [], hc = [];
+    function push(d, cc) { hd.push(d); hc.push(cc); var k = hd.length - 1; while (k > 0) { var p = (k - 1) >> 1; if (hd[p] <= hd[k]) break; var td = hd[p]; hd[p] = hd[k]; hd[k] = td; var tc = hc[p]; hc[p] = hc[k]; hc[k] = tc; k = p; } }
+    function pop() {
+      var cc = hc[0], ld = hd.pop(), lc = hc.pop();
+      if (hd.length) { hd[0] = ld; hc[0] = lc; var k = 0, n = hd.length;
+        for (;;) { var l = 2 * k + 1, r = l + 1, m = k; if (l < n && hd[l] < hd[m]) m = l; if (r < n && hd[r] < hd[m]) m = r; if (m === k) break;
+          var td = hd[m]; hd[m] = hd[k]; hd[k] = td; var tc = hc[m]; hc[m] = hc[k]; hc[k] = tc; k = m; } }
+      return cc;
+    }
+    for (c = 0; c < N; c++) {
+      dist[c] = 1e9; i = c % NX; j = (c - i) / NX;
+      if (CHAN[REG[c]] && U.dist(ccx(i), ccz(j), P.vortexX, P.vortexZ) <= P.vortexRo + 0.025) { dist[c] = 0; push(0, c); }
+    }
+    while (hd.length) {
+      c = pop(); if (done[c]) continue; done[c] = 1;
+      i = c % NX; j = (c - i) / NX;
+      for (var dj2 = -1; dj2 <= 1; dj2++) for (var di2 = -1; di2 <= 1; di2++) {
+        if (!di2 && !dj2) continue;
+        var ni = i + di2, nj = j + dj2; if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) continue;
+        var nc = nj * NX + ni; if (done[nc] || REG[nc] === R.WALLHI) continue;
+        // the cup moves nc -> c (toward the swirl): climbing from nc up onto c is what costs
+        var cost = (di2 && dj2) ? 1.414 : 1;
+        if (TF[c] > TF[nc] + 0.002) cost += 400;
+        if (!clr[c]) cost += 30;
+        var dd = dist[c] + cost;
+        if (dd < dist[nc]) { dist[nc] = dd; push(dd, nc); }
+      }
+    }
+    for (j = 0; j < NZ; j++) for (i = 0; i < NX; i++) {
+      c = j * NX + i;
+      if (dist[c] >= 1e8 || dist[c] === 0) continue;
+      var gx = 0, gz = 0;
+      for (var dj3 = -1; dj3 <= 1; dj3++) for (var di3 = -1; di3 <= 1; di3++) {
+        if (!di3 && !dj3) continue;
+        var ni3 = i + di3, nj3 = j + dj3; if (ni3 < 0 || nj3 < 0 || ni3 >= NX || nj3 >= NZ) continue;
+        var n3 = nj3 * NX + ni3; if (dist[n3] >= 1e8) continue;
+        var dlt = dist[c] - dist[n3]; if (dlt <= 0) continue;
+        var len = Math.sqrt(di3 * di3 + dj3 * dj3);
+        gx += di3 / len * dlt; gz += dj3 / len * dlt;
+      }
+      var gl = Math.sqrt(gx * gx + gz * gz);
+      if (gl > 1e-9) { RTX[c] = gx / gl; RTZ[c] = gz / gl; }
+    }
+  }
+  // drift strength now (0..1): the armed drain still running out of a pond, before the lap
+  function driftAmp() {
+    if (plugged || !drain.armed || drain.lapDone) return 0;
+    return clamp(drain.q / P.driftQ, 0, 1) * U.smooth((levelMean - P.driftLvl0) / (P.driftLvl1 - P.driftLvl0)) * U.smooth(drain.tOpen / 0.6) *
+      (1 - U.smooth((drain.tOpen - P.vortexMaxLife) / P.vortexFade));
+  }
+  function inDockShelter(x, z) { var D = L.DOCK, lim = D.half + P.cradleMargin; return Math.abs(x - D.x) < lim && Math.abs(z - D.z) < lim; }
+
   function rebuildTB() {
     DAMMASK.fill(0);
     if (dams.S) L.DAMS.S.cells.forEach(function (c) { DAMMASK[c] = 1; });
@@ -4440,6 +4524,8 @@ G.water = (function () {
     }
     for (var k = 0; k < drainList.length; k++) TB[drainList[k]] = plugged ? P.plugH : P.strainerH;
     faceDirty = true;
+    var rk = (dams.S ? 'S' : '') + (dams.E ? 'E' : '');
+    if (!RTX || rk !== routeKey) { routeKey = rk; buildRouteField(); }
   }
 
   function rebuildFaces(sdt) {
@@ -4579,7 +4665,7 @@ G.water = (function () {
   function setPlug(on) {
     ensure();
     on = !!on; if (plugged === on) return;
-    plugged = on; drain.plugged = on; rebuildTB();
+    plugged = on; drain.plugged = on; rebuildTB(); bi.released = false;
     emit(on ? 'drain:closed' : 'drain:open', {});
   }
   function setBridge(rim) {
@@ -4952,13 +5038,17 @@ G.water = (function () {
     var hs = 0, hn = 0;
     for (k = 0; k < ringList.length; k++) { c = ringList[k]; if (H[c] > 0.001) { hs += T[c] + H[c]; hn++; } }
     drain.head = hn ? hs / hn - C.W0 : 0;
-    // the swirl forms when the plug is pulled from a deep pond, carries a floating cup round about once, then collapses
+    // the swirl forms when the plug is pulled from a deep pond, carries a floating cup round once, then collapses
+    // FIX(O1/PLAY-1): armed only by a pond drain; lasts while the pond is still running out (level gate) up to
+    // vortexMaxLife, and fades over vortexFade once the cup has made its lap (no fixed 4.8 s clock any more)
     var target = 0;
     if (!plugged) {
-      drain.tOpen += dt;
-      var env = U.smooth(drain.tOpen / 0.8) * (1 - U.smooth((drain.tOpen - P.vortexLife) / P.vortexFade));
+      drain.tOpen += dt; if (drain.lapDone) drain.lapT += dt;
+      var env = (drain.armed ? 1 : 0) * U.smooth(drain.tOpen / 0.8) * (drain.lapDone ? 1 - U.smooth(drain.lapT / P.vortexFade) : 1) *
+        (1 - U.smooth((drain.tOpen - P.vortexMaxLife) / P.vortexFade));
       target = env * U.smooth((levelMean - P.vortexLvl0) / (P.vortexLvl1 - P.vortexLvl0));
-    } else drain.tOpen = 0;
+    } else { drain.tOpen = 0; drain.lapDone = false; drain.lapT = 0; drain.armed = levelMean > C.PART_H; }
+    drain.drift = driftAmp();
     drain.open = plugged ? 0 : U.smooth((drain.head - 0.002) / 0.004);
     if (first) drain.vortex = target;
     else drain.vortex += (target - drain.vortex) * (1 - Math.exp(-dt / (target > drain.vortex ? P.vortexSpinUp : P.vortexSpinDown)));
@@ -4971,6 +5061,18 @@ G.water = (function () {
         var dx = ccx(i) - drain.swirlX, dz = ccz(j) - drain.swirlZ, r = Math.sqrt(dx * dx + dz * dz) + 1e-6;
         var vt = vs * r * vortexProfile(r);
         VXo[c] += vt * dz / r; VZo[c] -= vt * dx / r;
+      }
+    }
+    // FIX(O1/PLAY-1): the surface drift shows in the rendered surface flow too (the water visibly streams to the drain)
+    if (drain.drift > 0.01) {
+      var dv = drain.drift * P.driftV * P.driftVis;
+      for (c = 0; c < N; c++) {
+        if (H[c] < 0.001 || (RTX[c] === 0 && RTZ[c] === 0)) continue;
+        i = c % NX; j = (c - i) / NX;
+        var px = ccx(i), pz = ccz(j);
+        if (inDockShelter(px, pz)) continue;
+        var fr = U.smooth((U.dist(px, pz, drain.swirlX, drain.swirlZ) - P.driftR0) / (P.driftR1 - P.driftR0));
+        VXo[c] += dv * fr * RTX[c]; VZo[c] += dv * fr * RTZ[c];
       }
     }
   }
@@ -5164,17 +5266,25 @@ G.water = (function () {
     var ux = s.ux, uz = s.uz;
     var sx = s.sx, sz = s.sz, sl = Math.sqrt(sx * sx + sz * sz);
     if (sl < P.slopeDead) { sx = 0; sz = 0; } else { var f2 = 1 - P.slopeDead / sl; sx *= f2; sz *= f2; }
+    var dxv = b.x - drain.swirlX, dzv = b.z - drain.swirlZ, rv = Math.sqrt(dxv * dxv + dzv * dzv);
+    // FIX(O1/PLAY-1): the draining pond's surface drift carries a floating cup along the open-water route to the swirl
+    // (handed over to the swirl near the drain; sheltered in the dock cradle; ends once the cup has made its lap)
+    if (drain.drift > 0 && !bi.released && !b.grounded && s.wet && !inDockShelter(b.x, b.z)) {
+      var cd = cellOf(b.x, b.z), da = drain.drift * P.driftV * U.smooth((rv - P.driftR0) / (P.driftR1 - P.driftR0));
+      if (da > 0 && (RTX[cd] !== 0 || RTZ[cd] !== 0)) { ux += da * RTX[cd]; uz += da * RTZ[cd]; }
+    }
     var dxd = b.x - drain.x, dzd = b.z - drain.z, rd = Math.sqrt(dxd * dxd + dzd * dzd);
     if (rd > 1e-4 && rd < P.suckR1) {
       // floating things are not sucked into the drain: the drain / standpipe draws from below the strainer or the plug cloth,
       // and the drawdown cone around the sump does not tip the boat in (the vortex carries it round instead)
+      // FIX(O1/PLAY-1): open drain: only right at the sump (6-9 cm), so the converging current can bring a cup to the swirl
       var nx = dxd / rd, nz = dzd / rd, ur = ux * nx + uz * nz;
-      var att = (plugged ? P.suckPlugged : P.suckOpen * drain.open) * (1 - U.smooth((rd - P.suckR0) / (P.suckR1 - P.suckR0)));
+      var att = plugged ? P.suckPlugged * (1 - U.smooth((rd - P.suckR0) / (P.suckR1 - P.suckR0)))
+        : P.suckOpen * drain.open * (1 - U.smooth((rd - P.suckOpenR0) / 0.03));
       if (ur < 0 && att > 0) { ux -= ur * nx * att; uz -= ur * nz * att; }
       if (att > 0) { sx *= 1 - att; sz *= 1 - att; }
     }
-    var dxv = b.x - drain.swirlX, dzv = b.z - drain.swirlZ, rv = Math.sqrt(dxv * dxv + dzv * dzv);
-    if (drain.vortex > 0 && rv < P.vortexZone && rv > 1e-4) {
+    if (drain.vortex > 0 && rv < P.vortexZone && rv > 1e-4 && !bi.released) {
       // inside a running vortex the swirl dominates what the floating cup feels; a gentle radial pull keeps it on the loop
       var pr = vortexProfile(rv), vs2 = drain.vortex * pr, vt = vs2 * P.vortexOmega * drain.dir * Math.max(rv, 0.02), keep = 1 - P.vortexDominance * vs2;
       var tnx = dzv / rv, tnz = -dxv / rv, vr = -P.vortexSpring * (rv - drain.swirlR) * vs2;
@@ -5242,18 +5352,20 @@ G.water = (function () {
     var onDock = b.grounded && regionAt(b.x, b.z) === R.DOCK;
     if (onDock !== b.onDock) { b.onDock = onDock; emit(onDock ? 'boat:docked' : 'boat:undocked', { x: b.x, z: b.z }); }
     // orbit counting around the drain
-    if (drain.vortex > 0.04 && rv < P.vortexZone + 0.03) {
+    if (drain.vortex > 0.04 && rv < P.vortexZone + 0.03 && !bi.released) {
       var th = Math.atan2(b.z - drain.swirlZ, b.x - drain.swirlX);
       if (bi.orbitTh !== null) {
         var dth = th - bi.orbitTh; if (dth > Math.PI) dth -= 2 * Math.PI; else if (dth < -Math.PI) dth += 2 * Math.PI;
         if (rv > 0.012) bi.orbitAcc += dth;   // ignore jitter right at the swirl centre
         if (Math.abs(bi.orbitAcc) >= 2 * Math.PI) {
           b.orbits++; bi.orbitAcc -= (bi.orbitAcc > 0 ? 2 : -2) * Math.PI;
+          // FIX(O1/PLAY-1): exactly one lap: the swirl lets the cup go and collapses; the falling water leaves it in a channel
+          bi.released = true; drain.lapDone = true;
           emit('boat:orbit', { n: b.orbits });
         }
       }
       bi.orbitTh = th;
-    } else if (drain.vortex <= 0.02) { bi.orbitAcc = 0; bi.orbitTh = null; }
+    } else if (drain.vortex <= 0.02 || bi.released) { bi.orbitAcc = 0; bi.orbitTh = null; }
     b.orbit = Math.abs(bi.orbitAcc) / (2 * Math.PI);
     // yaw follows motion (oval: symmetric ends)
     if (v > 0.008) {
@@ -5792,13 +5904,16 @@ G.scene = (function () {
           'vec2 pert = (nf.xy * (0.05 + min(sp * 2.4, 0.45)) + n2.xy * 0.07) * uRipple * smoothstep(0.0, 0.003, vW.y);',
           'normal = normalize(normal + (viewMatrix * vec4(pert.x, 0.0, pert.y, 0.0)).xyz);'
         ].join('\n');
-        // meniscus: a thin bright band where the film thins out onto dry steel (makes the waterline readable)
+        // meniscus: a thin bright band where the film thins out onto dry steel (makes the waterline readable).
+        // FIX(V3): only where the depth changes fast (a real waterline); a wide thin film on the shelf / island top lies
+        // entirely inside the depth band and was brightened as a whole into a white sheet.
         fo = 'float sm = smoothstep(0.0, 0.0012, vW.y); float men = smoothstep(0.00025, 0.0007, vW.y) * (1.0 - smoothstep(0.0011, 0.0026, vW.y));' +
+          ' float gfDg = fwidth(vW.y) / max(fwidth(vWPos.x) + fwidth(vWPos.z), 1e-6); men *= smoothstep(0.02, 0.06, gfDg);' +
           ' gl_FragColor = gfOut(totalDiffuse + totalEmissiveRadiance, max(diffuseColor.a, men * 0.2), (reflectedLight.directSpecular * ' + kDir + ' + reflectedLight.indirectSpecular) * sm + vec3(0.15, 0.17, 0.18) * men, ' + ks + ');';
       } else if (kind === 'stream') {
         vp += 'attribute vec4 aC;\n';
         vb = 'vW = aC; vV = vec4(uv, 0.0, 0.0);';
-        fc = 'vec3 tint = gfDye(vW.x, vW.y); float st = clamp(vW.x + vW.y, 0.0, 1.0); diffuseColor.rgb = tint * mix(0.5, 0.95, st); diffuseColor.a = vW.w * mix(0.45, 0.88, st);';
+        fc = 'vec3 tint = gfDye(vW.x, vW.y); float st = clamp(vW.x + vW.y, 0.0, 1.0); diffuseColor.rgb = tint * mix(0.5, 0.95, st); diffuseColor.a = vW.w * mix(0.62, 0.97, st);';   // FIX(V8): ~1.4x more opaque
         fn = [
           'vec2 suv = vec2(vV.x * 1.0, vV.y * 2.2 - uTime * 3.2);',
           'vec3 sn = texture2D(uNrm, suv * vec2(1.0, 0.5)).xyz * 2.0 - 1.0;',
@@ -5819,9 +5934,10 @@ G.scene = (function () {
         vb = 'vW = vec4(1.0, 0.0, 0.0, 0.0);';
         fc = [
           'vec3 vdir = normalize(vViewPosition); float fr = pow(1.0 - abs(dot(normalize(vNormal), vdir)), 1.5);',
-          'float rim = smoothstep(0.30, 0.92, fr);',
-          'diffuseColor.rgb = mix(vec3(0.42, 0.56, 0.62), vec3(0.03, 0.10, 0.16), rim);',
-          'diffuseColor.a = mix(0.30, 0.94, smoothstep(0.08, 0.8, fr));'
+          // FIX(V4): a wider, darker refracted rim so the drop also reads on bright brushed steel
+          'float rim = smoothstep(0.20, 0.84, fr);',
+          'diffuseColor.rgb = mix(vec3(0.40, 0.55, 0.62), vec3(0.015, 0.06, 0.10), rim);',
+          'diffuseColor.a = mix(0.36, 0.97, smoothstep(0.06, 0.7, fr));'
         ].join('\n');
         fo = 'gl_FragColor = gfOut(totalDiffuse + totalEmissiveRadiance * (1.0 - rim * 0.8) / max(diffuseColor.a, 0.05), diffuseColor.a, totalSpecular, ' + ks + ');';
       } else if (kind === 'ripple') {
@@ -5941,6 +6057,21 @@ G.scene = (function () {
     S.initTimes = tm;
     S.ready = true;
     resize();
+    // FIX(F2): after a WebGL context loss + restore three re-uploads textures / geometry by itself (its own listener was
+    // registered first, in the WebGLRenderer constructor, so GL is re-initialised when this runs), but the PMREM
+    // environment is a render target with no source data: rebuild it, or the room stays ~40% darker for good.
+    canvasEl.addEventListener('webglcontextrestored', function () {
+      try {
+        var old = S.envMap; buildEnv();
+        S.scene.traverse(function (o) {
+          var ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+          for (var q = 0; q < ms.length; q++) if (ms[q] && ms[q].envMap && ms[q].envMap === old) { ms[q].envMap = S.envMap; ms[q].needsUpdate = true; }
+        });
+        // (the old target is not disposed: its GL objects died with the lost context; deleting them would only warn)
+        if (S.lights && S.lights.spot && S.lights.spot.shadow) S.lights.spot.shadow.needsUpdate = true;
+        TW.ver = -2;   // re-upload the tray water next frame
+      } catch (e) { /* keep playing with the flat look */ }
+    }, false);
     window.addEventListener('resize', function () { resize(); });
     window.addEventListener('orientationchange', function () { setTimeout(resize, 60); setTimeout(resize, 400); });
     return S;
@@ -6578,20 +6709,26 @@ G.scene = (function () {
     for (var k = 0; k < n; k++) { var t = tEnd * k / (n - 1); pts.push([x0 + vx * t, y0 + vy * t - 0.5 * g * t * t, z0 + vz * t]); }
     return pts;
   }
+  var SPOUT_RIMS = ['A', 'B'], spoutPath = {};
   function updateStreams(A, dt) {
     var TB = L.TUBS, LO = TB.LO;
     // spouts
-    ['A', 'B'].forEach(function (rim) {
-      var q = spoutQ(rim), sp = LO[rim].spout, to = LO[rim].pourTo;
+    for (var ri = 0; ri < 2; ri++) {
+      var rim = SPOUT_RIMS[ri], q = spoutQ(rim), sp = LO[rim].spout, to = LO[rim].pourTo;
       if (q > 1e-7) {
-        var su = traySurfaceAt(to.x, to.z), yEnd = su ? su.y : TY + 0.01;
-        var lip = LO[rim].spoutLipY, xa = LO.x1 - LO.wall - 0.003, pre = [];
-        for (var k = 0; k < 4; k++) { var t = k / 4; pre.push([lerp(xa, sp.x1, t), lerp(lip + 0.0008, sp.yMouth + 0.0015, t), sp.z]); }
-        var pts = fallPath(sp.x1 + 0.002, sp.yMouth + 0.001, sp.z, 0.07, 0, yEnd, pre);
+        var su = traySurfaceAt(to.x, to.z), yEnd = su ? su.y : TY + 0.01, cache = spoutPath[rim];
+        // FIX(V7): the arc only depends on where it lands: rebuild it only when that level moves (no per-frame garbage)
+        if (!cache || Math.abs(cache.yEnd - yEnd) > 0.0004) {
+          var lip = LO[rim].spoutLipY, xa = LO.x1 - LO.wall - 0.003, pre = [];
+          for (var k = 0; k < 4; k++) { var t = k / 4; pre.push([lerp(xa, sp.x1, t), lerp(lip + 0.0008, sp.yMouth + 0.0015, t), sp.z]); }
+          cache = spoutPath[rim] = { yEnd: yEnd, pts: fallPath(sp.x1 + 0.002, sp.yMouth + 0.001, sp.z, 0.07, 0, yEnd, pre) };
+        }
         var wdt = clamp(0.0022 + Math.sqrt(q) * 0.30, 0.0022, 0.009);
-        setStream('spout' + rim, pts, wdt, spoutDye(rim), { flat: 4, q: q });
+        // FIX(V8): never thinner than ~4 CSS px on screen (phones: ppm ~220 -> 1.2 cm radius cap), so the pour reads
+        wdt = Math.max(wdt, Math.min(0.012, 2.7 / pxPerMeterAt(sp.x1, sp.yMouth, sp.z)));
+        setStream('spout' + rim, cache.pts, wdt, spoutDye(rim), { flat: 4, q: q });
       }
-    });
+    }
     var P = STR.pa.array, N = STR.na.array, Ca = STR.ca.array;
     for (var s = 0; s < STR.list.length; s++) {
       var o = STR.list[s];
@@ -6656,6 +6793,16 @@ G.scene = (function () {
     root.add(m);
     BB = { mesh: m, ai: ai, ph: 0, curve: null, rim: null, t: 0, dripT: 0, col: new T.Color(), mtx: new T.Matrix4(), q: new T.Quaternion(), sc: new T.Vector3(), p: new T.Vector3() };
   }
+  // FIX(V7): one persistent curve, rebuilt (arc lengths) only when the cloth line really moves - no per-frame garbage
+  function bridgeCurve(pts) {
+    var c = BB.curve, n = pts.length, ch = !c || c.points.length !== n, k;
+    if (!ch) for (k = 0; k < n && !ch; k++) { var a = c.points[k], q = pts[k]; ch = Math.abs(a.x - q[0]) > 3e-4 || Math.abs(a.y - q[1]) > 3e-4 || Math.abs(a.z - q[2]) > 3e-4; }   // 0.3 mm: invisible for the beads
+    if (!ch) return c;
+    if (!c || c.points.length !== n) { var vs = []; for (k = 0; k < n; k++) vs.push(new T.Vector3()); c = BB.curve = new T.CatmullRomCurve3(vs); }
+    for (k = 0; k < n; k++) c.points[k].set(pts[k][0], pts[k][1], pts[k][2]);
+    c.updateArcLengths();
+    return c;
+  }
   function updateBridge(A, dt) {
     var br = A && A.bridge, rim = br ? (br.rim || br.on || null) : null;
     if (rim !== 'A' && rim !== 'B') rim = null;
@@ -6668,7 +6815,7 @@ G.scene = (function () {
     var m = BB.mesh;
     if (!rim) { m.count = 0; m.visible = false; return; }
     var pts = (bridgeCurveOverride && S.time - bridgeCurveT < 0.5 && bridgeCurveOverride.rim === rim) ? bridgeCurveOverride.pts : defaultBridgePts(rim);
-    var curve = new T.CatmullRomCurve3(pts.map(function (q) { return new T.Vector3(q[0], q[1], q[2]); }));
+    var curve = bridgeCurve(pts);
     BB.ph += dt * (0.35 + 0.4 * bw.flow);
     var nb = 0, lim = clamp(front, 0, 1);
     for (var k = 0; k < NBEAD; k++) {
@@ -6848,8 +6995,29 @@ G.scene = (function () {
       if (!same) { HINT.t = 0; if (!HINT.cur) HINT.cur = { x: tg.x, y: HINT.target.y, z: tg.z }; }
     } else HINT.target = null;
   }
+  var ppmV = null;
+  // world lift (m) that moves a droplet at (x,y,z) (scale sc) clear of the cup on screen (0 when it does not overlap)
+  var clrA = null, clrB = null, clrC = null;
+  function cupClearLift(x, y, z, sc, ppm) {
+    if (!BOAT || !BOAT.group.visible || !S.size) return 0;
+    var bp = BOAT.group.position;
+    if (Math.abs(bp.x - x) > 0.35 || Math.abs(bp.z - z) > 0.35) return 0;
+    if (!clrA) { clrA = new T.Vector3(); clrB = new T.Vector3(); clrC = new T.Vector3(); }
+    var cam = S.camera, hw = S.size.w / 2, hh = S.size.h / 2;
+    clrA.set(bp.x, bp.y + 0.014, bp.z).project(cam);          // cup centre
+    clrB.set(x, y, z).project(cam);                           // droplet centre
+    clrC.set(x, y + 0.01, z).project(cam);                    // droplet 1 cm higher
+    var cx = clrA.x * hw, cy = clrA.y * hh, dx = clrB.x * hw - cx, dy = clrB.y * hh - cy;
+    var ux = (clrC.x - clrB.x) * hw, uy = (clrC.y - clrB.y) * hh;
+    var need = 0.056 * pxPerMeterAt(bp.x, bp.y, bp.z) + 0.85 * sc * ppm + 4;   // cup half-length + droplet / glow core + margin (px)
+    var c0 = dx * dx + dy * dy - need * need; if (c0 >= 0) return 0;
+    var a = ux * ux + uy * uy; if (a < 1e-6) return 0;
+    var b = dx * ux + dy * uy, k = (-b + Math.sqrt(Math.max(0, b * b - a * c0))) / a;   // first k >= 0 with |d + k u| = need
+    return clamp(k * 0.01, 0, 0.35);
+  }
   function pxPerMeterAt(x, y, z) {
-    var cam = S.camera, v = new T.Vector3(x, y, z).applyMatrix4(cam.matrixWorldInverse);
+    if (!ppmV) ppmV = new T.Vector3();
+    var cam = S.camera, v = ppmV.set(x, y, z).applyMatrix4(cam.matrixWorldInverse);
     var d = Math.max(0.2, -v.z), hh = 2 * d * Math.tan(cam.fov * Math.PI / 360);
     return (S.size ? S.size.h : 600) / hh;
   }
@@ -6864,31 +7032,39 @@ G.scene = (function () {
       H.fx = tg.fx; H.fz = tg.fz;
     }
     H.t += dt;
-    var c = H.cur, ppm = pxPerMeterAt(c.x, c.y, c.z), size = clamp(38 / ppm, 0.026, 0.10);
+    // FIX(V4): the droplet is ~38 CSS px on every screen (phones have ~220 px/m, so the world size cap is higher)
+    var c = H.cur, ppm = pxPerMeterAt(c.x, c.y, c.z), size = clamp(38 / ppm, 0.026, 0.15);
     var per = 1.5, ph = (H.t % per) / per, hop = 0, squash = 0;
     // bob + small hop with a squash on "landing"
     if (ph < 0.32) { var q = ph / 0.32; hop = Math.sin(q * Math.PI) * 0.9; } else if (ph < 0.42) { squash = Math.sin((ph - 0.32) / 0.1 * Math.PI) * 0.22; }
     var bob = Math.sin(H.t * 2.6) * 0.12;
-    var y = c.y + size * (1.35 + hop + bob);
+    var sc = size * (0.55 + 0.45 * smooth(H.vis)), hopA = Math.min(size, 0.09);
+    // hover: the droplet's underside (lathe y -0.62) floats above the target point, the hop rides on top of that
+    var y = c.y + sc * 0.62 + hopA * (0.73 + hop + bob);
+    // FIX(V2b/V1): never sit on the cup. If the droplet (or its glow core) would cover the cup on screen, it floats higher
+    // ("screen up") until it clears it: it still points at the cup from just above, and the cup stays readable.
+    var lift = cupClearLift(c.x, y, c.z, sc, ppm);
+    H.lift = U.damp(H.lift || 0, lift, lift > (H.lift || 0) ? 9 : 4, dt);
+    y += H.lift;
+    var lifted = smooth(H.lift / 0.04);
     H.drop.visible = true;
     H.drop.position.set(c.x, y, c.z);
-    var sc = size * (0.55 + 0.45 * smooth(H.vis));
     H.drop.scale.set(sc * (1 + squash * 0.6), sc * (1 - squash), sc * (1 + squash * 0.6));
     H.drop.rotation.y = H.t * 0.7;
     H.glow.visible = true; H.glow.position.set(c.x, y, c.z);
-    var gs = size * (2.6 + 0.5 * Math.sin(H.t * 3.1)); H.glow.scale.set(gs, gs, 1);
-    H.glow.material.opacity = 0.42 * H.vis;
+    var gs = size * (2.3 + 0.4 * Math.sin(H.t * 3.1)); H.glow.scale.set(gs, gs, 1);
+    H.glow.material.opacity = 0.62 * H.vis;
     var sb = S.surfaceAt(c.x, c.z);
-    if (sb && Math.abs(sb.y - c.y) < 0.06) {
+    if (sb && Math.abs(sb.y - c.y) < 0.06 && lifted < 0.99) {
       var hk = clamp((y - sb.y) / (size * 3.5), 0, 1), ss = size * (1.45 - 0.5 * hk);
       H.shade.visible = true; H.shade.position.set(c.x, sb.y + 0.0012, c.z); H.shade.scale.set(ss, 1, ss);
-      H.shade.material.opacity = 0.55 * H.vis * (1 - 0.45 * hk);
+      H.shade.material.opacity = 0.55 * H.vis * (1 - 0.45 * hk) * (1 - lifted);
     } else H.shade.visible = false;
     var cyc = Math.floor(H.t / per);
     if (ph >= 0.32 && H.lastCyc !== cyc) {
       H.lastCyc = cyc;
       var su = S.surfaceAt(c.x, c.z);
-      if (tg && S.fx && S.fx.ripple && su && Math.abs(su.y - c.y) < 0.05) S.fx.ripple(c.x, su.y + 0.001, c.z, size * 2.0, su.wet ? 0.8 : 0.55);
+      if (tg && S.fx && S.fx.ripple && su && su.kind !== 'boat' && lifted < 0.5 && Math.abs(su.y - c.y) < 0.05) S.fx.ripple(c.x, su.y + 0.001, c.z, Math.min(size, 0.10) * 2.0, su.wet ? 0.8 : 0.55);
     }
     // floor shimmer ring at the foothold
     if (H.fx != null && H.fz != null) {
@@ -7002,7 +7178,7 @@ G.scene = (function () {
     var cam = S.camera, w = S.size.w, h = S.size.h, sr = safeRect(), asp = w / h;
     var sw = sr.x1 - sr.x0, shh = sr.y1 - sr.y0, sasp = sw / shh;
     var t = smooth((sasp - 0.55) / (1.30 - 0.55));
-    var elev = lerp(58, 41, t) * Math.PI / 180, azim = lerp(20, 26, t) * Math.PI / 180, fov = lerp(40, 30, t);
+    var elev = lerp(58, 41, t) * Math.PI / 180, azim = lerp(20, 26, t) * Math.PI / 180, fov = 30;   // FIX(V5): portrait too (flatter perspective: the far walkway, girl and M channel read larger)
     S.view.pan = 0; S.view.panTarget = 0;
     cam.fov = fov; cam.aspect = asp; cam.updateProjectionMatrix();
     var mx = Math.max(6, sw * 0.025), my = Math.max(6, shh * 0.02);
@@ -7129,10 +7305,17 @@ G.scene = (function () {
       var q = S.quality;
       if (q.auto && fdt > 0 && fdt < 1000) {
         fdt = Math.min(fdt, 250);
-        if (frameEMA > 20 || fdt >= 100) { q.slowT += Math.max(fdt, frameEMA > 20 ? fdt : 0); q.fastT = 0; } else if (frameEMA < 12.5) { q.fastT += fdt; q.slowT = 0; } else { q.slowT = Math.max(0, q.slowT - fdt); q.fastT = 0; }
-        if (q.slowT > 1500 && q.pr > q.minPr + 1e-3) { setPixelRatio(Math.max(q.minPr, q.pr - 0.25)); q.slowT = 0; q.level++; }
-        else if (q.slowT > 3000 && q.pr <= q.minPr + 1e-3 && !q.lowShadow) { q.lowShadow = true; S.lights.spot.shadow.autoUpdate = false; q.slowT = 0; q.level++; }
-        if (q.fastT > 6000 && q.pr < q.maxPr - 1e-3) { setPixelRatio(Math.min(q.maxPr, q.pr + 0.25)); q.fastT = 0; }
+        // FIX(V6): a 60 Hz display is vsync-bound at ~16.7 ms, so "fast" = at or under ~17.5 ms (EMA) for 8 s; a step up
+        // that is followed by a step down within 5 s blocks further step-ups for 60 s, doubling each time (no oscillation).
+        if (frameEMA > 20 || fdt >= 100) { q.slowT += Math.max(fdt, frameEMA > 20 ? fdt : 0); q.fastT = 0; } else if (frameEMA <= 17.5) { q.fastT += fdt; q.slowT = 0; } else { q.slowT = Math.max(0, q.slowT - fdt); q.fastT = 0; }
+        var down = false;
+        if (q.slowT > 1500 && q.pr > q.minPr + 1e-3) { setPixelRatio(Math.max(q.minPr, q.pr - 0.25)); q.slowT = 0; q.level++; down = true; }
+        else if (q.slowT > 3000 && q.pr <= q.minPr + 1e-3 && !q.lowShadow) { q.lowShadow = true; S.lights.spot.shadow.autoUpdate = false; q.slowT = 0; q.level++; down = true; }
+        if (down && q.upAt && now - q.upAt < 5000) { q.upFails = (q.upFails || 0) + 1; q.upBlock = now + Math.min(600000, 60000 * Math.pow(2, q.upFails - 1)); }
+        if (q.fastT > 8000 && !(q.upBlock && now < q.upBlock)) {
+          if (q.lowShadow) { q.lowShadow = false; S.lights.spot.shadow.autoUpdate = true; q.fastT = 0; q.upAt = now; q.level = Math.max(0, q.level - 1); }
+          else if (q.pr < q.maxPr - 1e-3) { setPixelRatio(Math.min(q.maxPr, q.pr + 0.25)); q.fastT = 0; q.upAt = now; q.level = Math.max(0, q.level - 1); }
+        }
       }
     }
     lastNow = now;
@@ -8111,12 +8294,15 @@ G.girl = (function () {
     var g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new T.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
     return g;
   }
-  function lidPt(sd, ax, ay, r) {
+  function lidPt(sd, ax, ay, r, out) {
     var ct = Math.cos(EYE.tilt), st = Math.sin(EYE.tilt);
     var tx = r * Math.cos(ay) * Math.sin(ax), ty = r * Math.sin(ay), tz = r * Math.cos(ay) * Math.cos(ax);
     var dx = tx * ct - ty * st, dy = tx * st + ty * ct;
+    if (out) { out[0] = dx * sd; out[1] = dy; out[2] = tz; return out; }
     return [dx * sd, dy, tz];
   }
+  function v3nTo(a, out) { var l = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) || 1; out[0] = a[0] / l; out[1] = a[1] / l; out[2] = a[2] / l; return out; }
+  var LID_P = [0, 0, 0], LID_N = [0, 0, 0], LID_M = [0, 0, 0], LID_Q = [0, 0, 0];   // FIX(V7): scratch (no per-frame garbage)
   // upper + lower lid shells (smooth analytic caps around the eyeball; their outer parts sink into the face skin)
   function lidMesh(sd) {
     var NA = 26, NR = 8, rowsU = NR + 4, rowsL = NR + 2, rows = rowsU + rowsL;
@@ -8154,18 +8340,21 @@ G.girl = (function () {
       if (!inside) { top = bot = -0.02; }
       var edgeU = lerp(top, bot + 0.01, clamp(close, 0, 1)), edgeL = bot;
       // upper lid: rows 0..NR-1 skin from high up down to the margin, NR = margin roll, NR+1..3 lash ribbon
-      for (var r = 0; r < Ld.NR; r++) { var ay = edgeU + (Ld.NR - 1 - r) / (Ld.NR - 1) * 1.25 + 0.02; var p = lidPt(sd, ax, ay, RU + (r === Ld.NR - 1 ? 0.0004 : 0)); put(r, a, p, v3n(p)); }
-      var pm = lidPt(sd, ax, edgeU, RU + 0.0003); put(Ld.NR, a, pm, v3n(lidPt(sd, ax, edgeU - 0.3, 1)));
+      var SP = LID_P, SN = LID_N, PM = LID_M, SQ = LID_Q;
+      for (var r = 0; r < Ld.NR; r++) { var ay = edgeU + (Ld.NR - 1 - r) / (Ld.NR - 1) * 1.25 + 0.02; lidPt(sd, ax, ay, RU + (r === Ld.NR - 1 ? 0.0004 : 0), SP); put(r, a, SP, v3nTo(SP, SN)); }
+      lidPt(sd, ax, edgeU, RU + 0.0003, PM); put(Ld.NR, a, PM, v3nTo(lidPt(sd, ax, edgeU - 0.3, 1, SQ), SN));
       var lw = (inside ? 1 : 0.3) * (0.55 + 0.6 * sstep(-0.5, 0.9, ax)) * (1 - 0.5 * close);
-      put(Ld.NR + 1, a, lidPt(sd, ax, edgeU - 0.01, RU + 0.0006), v3n(pm));
-      put(Ld.NR + 2, a, lidPt(sd, ax, edgeU + 0.02 * lw, RU + 0.0014 + 0.0009 * lw), v3n(pm));
-      put(Ld.NR + 3, a, lidPt(sd, ax, edgeU + 0.07 * lw, RU + 0.0018 + 0.0016 * lw), v3n(pm));
+      v3nTo(PM, SN);
+      put(Ld.NR + 1, a, lidPt(sd, ax, edgeU - 0.01, RU + 0.0006, SP), SN);
+      put(Ld.NR + 2, a, lidPt(sd, ax, edgeU + 0.02 * lw, RU + 0.0014 + 0.0009 * lw, SP), SN);
+      put(Ld.NR + 3, a, lidPt(sd, ax, edgeU + 0.07 * lw, RU + 0.0018 + 0.0016 * lw, SP), SN);
       // lower lid: margin at edgeL going down
       var b0 = Ld.rowsU;
-      put(b0, a, lidPt(sd, ax, edgeL - 1.15, RLo), v3n(lidPt(sd, ax, edgeL - 1.15, 1)));
-      for (r = 1; r < Ld.NR; r++) { var ay2 = edgeL - (Ld.NR - 1 - r) / (Ld.NR - 1) * 1.15; var p2 = lidPt(sd, ax, ay2, RLo + (r === Ld.NR - 1 ? 0.0004 : 0)); put(b0 + r, a, p2, v3n(p2)); }
-      put(b0 + Ld.NR, a, lidPt(sd, ax, edgeL + 0.005, RLo + 0.0002), v3n(lidPt(sd, ax, edgeL + 0.3, 1)));
-      put(b0 + Ld.NR + 1, a, lidPt(sd, ax, edgeL + 0.012, RLo - 0.0002), v3n(lidPt(sd, ax, edgeL + 0.3, 1)));
+      put(b0, a, lidPt(sd, ax, edgeL - 1.15, RLo, SP), v3nTo(lidPt(sd, ax, edgeL - 1.15, 1, SQ), SN));
+      for (r = 1; r < Ld.NR; r++) { var ay2 = edgeL - (Ld.NR - 1 - r) / (Ld.NR - 1) * 1.15; lidPt(sd, ax, ay2, RLo + (r === Ld.NR - 1 ? 0.0004 : 0), SP); put(b0 + r, a, SP, v3nTo(SP, SN)); }
+      v3nTo(lidPt(sd, ax, edgeL + 0.3, 1, SQ), SN);
+      put(b0 + Ld.NR, a, lidPt(sd, ax, edgeL + 0.005, RLo + 0.0002, SP), SN);
+      put(b0 + Ld.NR + 1, a, lidPt(sd, ax, edgeL + 0.012, RLo - 0.0002, SP), SN);
     }
     g.attributes.position.needsUpdate = true; g.attributes.normal.needsUpdate = true;
   }
@@ -8809,13 +8998,74 @@ G.girl = (function () {
     f.sw = { t: 0, dur: dur, sx: f.x, sz: f.z, syaw: f.yaw, tx: hm.x, tz: hm.z, tyaw: hm.yaw, h: 0.028 + 0.035 * kk * clamp(Math.abs(st.v) / 0.9, 0.3, 1), k: kk };
   }
 
+  // ---------- idle hold that keeps the cup / drain swirl visible (screen-space test against the real camera)
+  var haV = null;
+  function haProj(x, y, z, out) { haV.set(x, y, z).project(G.scene.camera); out[0] = haV.x * G.scene.size.w * 0.5; out[1] = -haV.y * G.scene.size.h * 0.5; return out; }
+  function segDist(px, py, a, b) { var vx = b[0] - a[0], vy = b[1] - a[1], l2 = vx * vx + vy * vy, t = l2 > 1e-6 ? clamp(((px - a[0]) * vx + (py - a[1]) * vy) / l2, 0, 1) : 0, dx = a[0] + vx * t - px, dy = a[1] + vy * t - py; return Math.sqrt(dx * dx + dy * dy); }
+  var HA_PH = [0, 0], HA_PL = [0, 0], HA_PE = [0, 0], HA_C = [0, 0], HA_Z = [];
+  function haZones() { // protected discs {x,y,z,r} (world)
+    HA_Z.length = 0;
+    var w = G.water; if (!w) return HA_Z;
+    var b = w.boat;
+    if (b && typeof b.x === 'number') HA_Z.push({ x: b.x, y: (typeof b.y === 'number' && b.y > 0.3 ? b.y : L.TRAY_Y) + 0.012, z: b.z, r: 0.056 });
+    var d = w.drain;
+    if (d && (d.vortex || 0) > 0.02) HA_Z.push({ x: typeof d.swirlX === 'number' ? d.swirlX : L.DRAIN.x, y: L.TRAY_Y + Math.max(0.004, w.getLevel ? w.getLevel() : 0.01), z: typeof d.swirlZ === 'number' ? d.swirlZ : L.DRAIN.z, r: 0.10 });
+    return HA_Z;
+  }
+  function haCost(x, y, z, zones) {
+    var sc = G.scene, cost = 0;
+    haProj(x, y + 0.02, z, HA_PH); haProj(x, y - 0.17, z, HA_PL); haProj(lerp(x, st.x, 0.45), y + 0.07, lerp(z, st.z, 0.45), HA_PE);
+    var ppm = sc.pxPerMeter ? sc.pxPerMeter(x, y, z) : 300, rc = 0.05 * ppm, ra = 0.035 * ppm;
+    for (var i = 0; i < zones.length; i++) {
+      var Z = zones[i];
+      if (Math.abs(Z.x - x) > 0.45 || Math.abs(Z.z - z) > 0.45) continue;
+      haProj(Z.x, Z.y, Z.z, HA_C);
+      var rp = Z.r * (sc.pxPerMeter ? sc.pxPerMeter(Z.x, Z.y, Z.z) : 300);
+      cost += Math.max(0, rp + rc - segDist(HA_C[0], HA_C[1], HA_PH, HA_PL)) / rp + Math.max(0, rp + ra - segDist(HA_C[0], HA_C[1], HA_PH, HA_PE)) / rp;
+    }
+    return cost;
+  }
+  // candidates [aside along the walkway (m), back to the rim (0/1), lift (m), preference cost]:
+  // default, aside, back at the rim (a little higher), back + aside, far aside (keeps the cloth off the whole drain corner)
+  var HA_CAND = [[0, 0, 0, 0], [0.13, 0, 0, 0.08], [-0.13, 0, 0, 0.08], [0, 1, 0.05, 0.16], [0.10, 1, 0.05, 0.22], [-0.10, 1, 0.05, 0.22],
+    [0.20, 0, 0.02, 0.12], [-0.20, 0, 0.02, 0.12], [0.18, 1, 0.05, 0.26], [-0.18, 1, 0.05, 0.26]];
+  function holdAvoid(hx, hy, hz, n, edgeD, dt) {
+    var A = st.ha || (st.ha = { ox: 0, oy: 0, oz: 0, tx: 0, ty: 0, tz: 0, cur: 0, evalT: 0, kr: 0, cost: 0 });
+    var sc = G.scene;
+    A.evalT -= dt;
+    if (A.evalT <= 0 && sc && sc.camera && sc.size && sc.size.w > 0 && T) {
+      A.evalT = 0.1;
+      if (!haV) haV = new T.Vector3();
+      var zones = haZones();
+      if (!zones.length) { A.cur = 0; A.tx = A.ty = A.tz = 0; A.cost = 0; }
+      else {
+        var ix = -n.nx, iz = -n.nz, tx = -iz, tz = ix;                       // inward (toward her reach) / along the walkway
+        var dIn = Math.sqrt((hx - st.x) * (hx - st.x) + (hz - st.z) * (hz - st.z)), back = Math.max(0, dIn - (edgeD + 0.035));
+        var bx = -ix * back, bz = -iz * back, best = A.cur, bestC = 1e9, curC = 1e9;
+        var gx = ix * 0.04, gz = iz * 0.04;   // the gripping hands (and the cloth) sit ~4 cm beyond the wrist IK target
+        for (var c = 0; c < HA_CAND.length; c++) {
+          var cd = HA_CAND[c], ox = bx * cd[1] + tx * cd[0], oz = bz * cd[1] + tz * cd[0], oy = cd[2];
+          var cc = 2 * haCost(hx + ox + gx, hy + oy, hz + oz + gz, zones) + cd[3];
+          if (c === A.cur) curC = cc;
+          if (cc < bestC) { bestC = cc; best = c; }
+          if (c === A.cur || c === best) { if (c === best) { A._ox = ox; A._oy = oy; A._oz = oz; } if (c === A.cur) { A._cx = ox; A._cy = oy; A._cz = oz; } }
+        }
+        if (best !== A.cur && bestC < curC - 0.04) { A.cur = best; A.tx = A._ox; A.ty = A._oy; A.tz = A._oz; A.cost = bestC; }
+        else { A.tx = A._cx; A.ty = A._cy; A.tz = A._cz; A.cost = curC; }
+      }
+    }
+    A.ox = damp(A.ox, A.tx, 5, dt); A.oy = damp(A.oy, A.ty, 5, dt); A.oz = damp(A.oz, A.tz, 5, dt);
+    A.kr = damp(A.kr, HA_CAND[A.cur][1], 4, dt);
+    return A;
+  }
+
   // ---------- assemble pose params
   var BASE = { lean: 0, side: 0, twist: 0, crouch: 0, shrug: 0, hop: 0, tilt: 0, nod: 0 };
   function poseParams(dt, P, spd, holding) {
     var t = st.t, ph = st.phase * Math.PI * 2, ww = st.walkW;
     // body scalars
     var lean = 0.03 * ww * clamp(spd / 0.9, 0, 1) + 0.012 * Math.sin(t * 1.7) * (1 - ww);
-    var idleHoldLean = (holding != null && !P) ? 0.06 * st.workW : 0;
+    var idleHoldLean = (holding != null && !P) ? 0.06 * st.workW * (1 - 0.8 * (st.ha ? st.ha.kr : 0)) : 0;   // stands straighter when holding back
     var tl = { lean: lean + idleHoldLean + (P ? P.lean : 0), crouch: P ? P.crouch : 0, shrug: P ? P.shrug : 0, hop: P ? P.hop : 0, tilt: P ? P.tilt : 0, nod: P ? P.nod : 0 };
     for (var k in tl) st[k] = damp(st[k], tl[k], k === 'hop' ? 30 : 10, dt);
     // arm targets
@@ -8826,10 +9076,15 @@ G.girl = (function () {
       var sd = sideOf(st.x, st.z), moving = spd > 0.06;
       if (!moving && sd !== 'west' && st.workW > 0.25) {
         // hold the dripping cloth out over the sink
-        var n = nearestSink(st.x, st.z), hx = n.x - n.nx * 0.068, hz = n.z - n.nz * 0.068;
+        var n = nearestSink(st.x, st.z), hx = n.x - n.nx * 0.068, hz = n.z - n.nz * 0.068, edgeD = n.d;
         var nf = nearFoothold(st.x, st.z);
         if (nf) { var rdx = nf.reach.x - st.x, rdz = nf.reach.z - st.z, rl = Math.sqrt(rdx * rdx + rdz * rdz) || 1; var dd = Math.min(rl * 0.85, n.d + 0.115);   /* INTEGRATION: far enough out that drips (and the first-touch drop) land in the channel water */ hx = st.x + rdx / rl * dd; hz = st.z + rdz / rl * dd; n = { nx: -rdx / rl, nz: -rdz / rl, x: hx, z: hz }; }
-        var sx = -n.nz, sz = n.nx, hy = 0.705 + 0.006 * Math.sin(t * 1.3);
+        var hy = 0.705 + 0.006 * Math.sin(t * 1.3);
+        // FIX(V1 / PLAY-4 / V2a): the cloth must not hang over the cup (it is drawn to her reach by an absorb) nor over the
+        // drain swirl during the lap: move the hold aside along the walkway, or back to the rim and a little higher
+        var ha = holdAvoid(hx, hy, hz, n, edgeD, dt);
+        hx += ha.ox; hy += ha.oy; hz += ha.oz;
+        var sx = -n.nz, sz = n.nx;
         carryT[0] = [hx + sx * 0.045, hy, hz + sz * 0.045]; carryT[1] = [hx - sx * 0.045, hy, hz - sz * 0.045];
         // make sure L is on her left
         var lx0 = (carryT[0][0] - st.x) * cs - (carryT[0][2] - st.z) * sn;
@@ -9173,6 +9428,7 @@ G.girl = (function () {
   };
   API.state = function () { return st ? { s: st.s, sT: st.sT, v: st.v, x: st.x, z: st.z, heading: st.head, act: st.act ? st.act.name : null, t: st.act ? st.act.t : 0, workW: st.workW, feet: st.feet.map(function (f) { return { x: f.x, z: f.z, lift: f.lift, sw: !!f.sw }; }) } : null; };
   API.footWorld = function (k) { return st ? st.feet[k] : null; };
+  API.holdInfo = function () { var A = st && st.ha; return A ? { cur: A.cur, cost: A.cost, ox: A.ox, oy: A.oy, oz: A.oz, kr: A.kr } : null; };   // tests: idle-hold avoidance state
   API.debugParts = function () { return parts; };
   return API;
 })();
@@ -9657,10 +9913,11 @@ G.cloth = (function () {
       // outward direction in the surface plane
       var ox = 0, oy = 0, oz = 0, cI = (NU - 1) / 2, cJ = (NV - 1) / 2;
       var pa = (jj * NU + Math.min(NU - 1, ii + 1)) * 3, pb = (jj * NU + Math.max(0, ii - 1)) * 3, pc = (Math.min(NV - 1, jj + 1) * NU + ii) * 3, pd = (Math.max(0, jj - 1) * NU + ii) * 3;
-      var du = [P[pa] - P[pb], P[pa + 1] - P[pb + 1], P[pa + 2] - P[pb + 2]], dv = [P[pc] - P[pd], P[pc + 1] - P[pd + 1], P[pc + 2] - P[pd + 2]];
+      // (scalars, not small arrays: this runs for every hem vertex of both cloths every frame - FIX(V7) garbage)
+      var du0 = P[pa] - P[pb], du1 = P[pa + 1] - P[pb + 1], du2 = P[pa + 2] - P[pb + 2], dv0 = P[pc] - P[pd], dv1 = P[pc + 1] - P[pd + 1], dv2 = P[pc + 2] - P[pd + 2];
       var su2 = ii === 0 ? -1 : (ii === NU - 1 ? 1 : 0), sv2 = jj === 0 ? -1 : (jj === NV - 1 ? 1 : 0);
-      var dul = Math.sqrt(du[0] * du[0] + du[1] * du[1] + du[2] * du[2]) || 1, dvl = Math.sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]) || 1;
-      ox = du[0] / dul * su2 + dv[0] / dvl * sv2; oy = du[1] / dul * su2 + dv[1] / dvl * sv2; oz = du[2] / dul * su2 + dv[2] / dvl * sv2;
+      var dul = Math.sqrt(du0 * du0 + du1 * du1 + du2 * du2) || 1, dvl = Math.sqrt(dv0 * dv0 + dv1 * dv1 + dv2 * dv2) || 1;
+      ox = du0 / dul * su2 + dv0 / dvl * sv2; oy = du1 / dul * su2 + dv1 / dvl * sv2; oz = du2 / dul * su2 + dv2 / dvl * sv2;
       var ol = Math.sqrt(ox * ox + oy * oy + oz * oz) || 1; ox /= ol; oy /= ol; oz /= ol;
       void cI; void cJ;
       var tk = pi * 3, bk = (NP + pi) * 3;
@@ -10557,6 +10814,9 @@ G.audio = (function () {
   function startSelfDrive() {
     // watchdog: if the main loop does not call update(), drive the loops ourselves with requestAnimationFrame (which the browser
     // pauses while hidden); the rAF loop ends by itself as soon as update() is called from outside again
+    // FIX(F4): the game's own main loop (99_main) calls update() every frame: then no watchdog timer and no second rAF loop at
+    // all; elsewhere (audio test pages) the watchdog retires for good once update() has been called from outside
+    if (G.main && typeof G.main.step === 'function') return;
     var frame = 0;
     var loop = function () {
       selfRaf = 0;
@@ -10565,7 +10825,8 @@ G.audio = (function () {
       selfRaf = requestAnimationFrame(loop);
     };
     var dog = function () {
-      try { if (!selfRaf && live && typeof requestAnimationFrame === 'function' && nowMs() - extUpdAt > 1000) selfRaf = requestAnimationFrame(loop); } catch (e) { /**/ }
+      if (extUpdAt > 0) return;
+      try { if (!selfRaf && live && !hidden && typeof requestAnimationFrame === 'function' && nowMs() - extUpdAt > 1000) selfRaf = requestAnimationFrame(loop); } catch (e) { /**/ }
       setTimeout(dog, 2000);
     };
     setTimeout(dog, 1200);
@@ -10582,6 +10843,7 @@ G.audio = (function () {
   function suspend() {
     try {
       hidden = true;
+      if (selfRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(selfRaf); selfRaf = 0; }
       if (!live) return;
       var c = live.ctx, g = live.master.gain, t = c.currentTime;
       g.cancelScheduledValues(t); g.setTargetAtTime(0, t, 0.015);
@@ -10875,9 +11137,37 @@ G.game = (function () {
     if (!p || !isFinite(p.x) || !isFinite(p.z)) return null;
     return L.pathProject(p.x, p.z).s;
   }
+  // FIX(PLAY-5): a tap on the cup in front of her (inside her generous grab capsule, but clear of her body, hands and the
+  // held cloth) is a tap on the cup: it wobbles instead of gripping her
+  function boatTapNotGirl(cx, cy) {
+    var sc = scene(), b = boat(), g = G.girl; if (!sc || !b || !sc.pickProp || !g || !g.pos) return false;
+    if (safe('pickProp', function () { return sc.pickProp(cx, cy); }) !== 'boat') return false;
+    var pb = sc.project(b.x, b.y + 0.012, b.z), pq = sc.project(b.x + 0.1, b.y + 0.012, b.z);
+    var ppm = Math.max(20, Math.hypot(pq.x - pb.x, pq.y - pb.y) / 0.1), dB = Math.hypot(cx - pb.x, cy - pb.y);
+    var near = 1e9, h = heldId();
+    if (h != null && G.cloth && G.cloth.center) { var c = safe('clothCenter', function () { return G.cloth.center(h); }); if (c) { var pc = sc.project(c.x, c.y, c.z); near = Math.min(near, Math.hypot(cx - pc.x, cy - pc.y)); } }
+    var hs = g.hands ? safe('hands', function () { return g.hands(); }) : null;
+    if (hs) [hs.L, hs.R].forEach(function (hp) { if (hp) { var q = sc.project(hp.x, hp.y, hp.z); near = Math.min(near, Math.hypot(cx - q.x, cy - q.y)); } });
+    // (her torso stands behind the sink, farther from the camera than the cup: only her hands and the held cloth reach out to
+    //  the cup's depth, so they are what a tap on the cup could have meant)
+    return dB <= 0.065 * ppm && dB < near && near > 0.045 * ppm;
+  }
   function onDown(e) {
     markInput();
-    if (inp.id !== null) { inp.ignored++; return; }                 // only the first active pointer
+    if (inp.id !== null && e.pointerId !== inp.id) {
+      // FIX(F3): a tracked pointer that no longer holds capture has ended without an up / cancel reaching us
+      var cap = true;
+      if (canvasEl && canvasEl.hasPointerCapture) cap = !!safe('hasCapture', function () { return canvasEl.hasPointerCapture(inp.id); });
+      if (!cap) endDrag('stale', e);
+    }
+    if (inp.id !== null) {
+      // FIX(F1): only a pointer that is really dragging her blocks the others. A finger merely resting on the scene (a thumb
+      // holding the iPad, a palm) gives way to a new finger that lands on her; a second finger during a real drag is ignored.
+      var g0 = GL();
+      var take = !inp.drag && e.pointerId !== inp.id && !g0.ghost && g0.hitTest && !!safe('hitTest', function () { return g0.hitTest(e.clientX, e.clientY); });
+      if (!take) { inp.ignored++; return; }
+      endDrag('takeover', e);   // the earlier finger's later up / move is ignored by the pointer id check
+    }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (e.cancelable) e.preventDefault();
     unlockAudio();
@@ -10886,6 +11176,7 @@ G.game = (function () {
     if (canvasEl && canvasEl.setPointerCapture) { try { canvasEl.setPointerCapture(e.pointerId); } catch (er) { /* not capturable */ } }
     var g = GL(), hit = false;
     if (!g.ghost && g.hitTest) hit = !!safe('hitTest', function () { return g.hitTest(e.clientX, e.clientY); });
+    if (hit && boatTapNotGirl(e.clientX, e.clientY)) hit = false;
     if (hit) {
       inp.drag = true;
       // keep the grab offset: the girl's feet (on the path) stay under the finger + offset
@@ -10935,11 +11226,16 @@ G.game = (function () {
   }
   function endDrag(reason, e) {
     var id = inp.id;
-    if (inp.drag && inp.moved) {
+    if (inp.drag && inp.moved && reason === 'up') {
       var fs = inp.fs !== null ? inp.fs : girlS();
       var n = nearestFH(fs), tgt = n.d <= RELEASE_SNAP ? n.f.s : fs;
       setTarget(tgt);
       log('drag-end', { reason: reason, s: r3(tgt), snap: n.d <= RELEASE_SNAP ? n.f.id : null });
+    } else if (inp.drag && inp.moved) {
+      // FIX(F5): a drag the child did not finish (pointercancel by the OS, lost capture, blur, hidden...) chose nothing:
+      // she stops where she is instead of snapping on to a foothold and acting there
+      var s0 = girlS(); setTarget(s0);
+      log('drag-end', { reason: reason, s: r3(s0), snap: null });
     } else if (inp.drag) log('drag-end', { reason: reason, s: null, snap: null });
     inp.id = null; inp.drag = false; inp.moved = false; inp.fs = null; inp.fv = 0; inp.sPrev = null; inp.panX = inp.panZ = null;
     if (id !== null && canvasEl && canvasEl.releasePointerCapture) { try { if (!canvasEl.hasPointerCapture || canvasEl.hasPointerCapture(id)) canvasEl.releasePointerCapture(id); } catch (er) { /* already released */ } }
@@ -11074,7 +11370,10 @@ G.game = (function () {
       return w.absorb(pt.x, pt.z, maxVol, 1.2, C.REACH_ABSORB_R, function (r) { if (rec.done) return; rec.done = true; applyAbsorb(rec, r.vol, r.dye); log('absorbed', { at: f.id, vol: r3(r.vol * 1000) }); });
     });
     if (rec.hd) absorbing.push(rec);
-    if (b0) watches.push({ type: 'pull', t1: API.time + 3.5, b0: b0, pt: { x: pt.x, z: pt.z }, d0: dist(b0.x, b0.z, pt.x, pt.z), fh: f.id, side: sideOf(pt.x, pt.z, b0.x, b0.z) });
+    // FIX(PLAY-6): remember how the cup was already drifting (a feed may be carrying it toward her anyway): only the approach
+    // beyond that drift, from within the absorb's working range, counts as the cloth's pull
+    var bq = boat();
+    if (b0) watches.push({ type: 'pull', t0: API.time, t1: API.time + 3.5, b0: b0, v0: bq ? { x: bq.vx || 0, z: bq.vz || 0 } : { x: 0, z: 0 }, fed: feeding(), pt: { x: pt.x, z: pt.z }, d0: dist(b0.x, b0.z, pt.x, pt.z), fh: f.id, side: sideOf(pt.x, pt.z, b0.x, b0.z) });
   }
   function applyAbsorb(rec, vol, dye) {
     var cl = cloth(rec.h); if (!cl) return;
@@ -11252,7 +11551,8 @@ G.game = (function () {
             var wasDraining = API.time - drainOpenAt < 25 && drainOpenWasPond && w && w.getLevel && w.getLevel() > C.W0 + 0.002;
             setPlace(h, 'plug'); if (w) safe('plug', function () { w.setPlug(true); });
             startSoak(h); play('plug', {});
-            if (wasDraining && API.disc.d6.unplug != null && API.disc.d6.orbit != null) mark('d6', 'replug');
+            // FIX(PLAY-7): the re-plug counts only in the drain whose lap was seen, after that lap
+            if (wasDraining && API.disc.d6.unplug != null && lapThisDrain()) mark('d6', 'replug');
             plugFeedCheck();
           });
         }
@@ -11260,7 +11560,8 @@ G.game = (function () {
           var pond = !!(w && w.isPond && w.isPond());
           setPlace(pi, 'hand'); meta[pi].boatVol = 0; if (w) safe('plug', function () { w.setPlug(false); });
           play('unplug', {});
-          drainOpenAt = API.time; drainOpenWasPond = pond;
+          drainOpenAt = API.time; drainOpenWasPond = pond; drainId++;
+          lastWaterAct = API.time;                 // FIX(PLAY-4): her gaze follows the cup round the swirl
           if (pond) mark('d6', 'unplug');
         });
         return rPeek();
@@ -11268,7 +11569,8 @@ G.game = (function () {
     }
     return rPeek();
   }
-  var drainOpenAt = -99, drainOpenWasPond = false;
+  var drainOpenAt = -99, drainOpenWasPond = false, drainId = 0, lapDrainId = -1;
+  function lapThisDrain() { return lapDrainId === drainId && drainId > 0; }
   function damMoved(side) { // a dam now lies on 'side': after a seen turn, moving it to the other side is the d3 'swap'
     var D = API.disc.d3;
     mark('d3', 'dam');
@@ -11294,12 +11596,13 @@ G.game = (function () {
     if (bb && /^(wring-chan|wring-board|absorb-chan|absorb-junction)$/.test(r.rule)) { tries.push({ id: f.id, x: bb.x, z: bb.z, t: API.time, pond: !!(ww && ww.isPond && ww.isPond()) }); if (tries.length > 60) tries.shift(); }
     if (HNT.cur && /^prep-/.test(HNT.cur.goal || '') && /^(wring-chan|absorb-chan|absorb-junction)$/.test(r.rule)) prepCount++;
     if (HNT.cur && /^bring-/.test(HNT.cur.goal || '') && /^(wring-chan|absorb-chan|absorb-junction)$/.test(r.rule)) bringTimes.push(API.time);
+    if (HNT.cur && /^bring3-/.test(HNT.cur.goal || '') && /^(wring-chan|wring-board|absorb-chan|absorb-junction)$/.test(r.rule)) bring3Times.push(API.time);
     var pend = API.pending;
     var opts = {}; for (var k in r.opts) opts[k] = r.opts[k];
     opts.foothold = f.id;
     var contacted = false;
     opts.onContact = function () {
-      if (contacted) return; contacted = true; pend.contacted = true;
+      if (contacted) return; contacted = true; pend.contacted = true; lastContactAt = API.time;
       if (h != null) endAbsorb(h);
       safe('contact:' + r.rule, r.contact);
       log('contact', { at: f.id, rule: r.rule });
@@ -11336,7 +11639,7 @@ G.game = (function () {
       }
       var early = false;
       if (b && wt.type === 'push') early = dist(b.x, b.z, wt.b0.x, wt.b0.z) >= 0.04;
-      if (b && wt.type === 'pull') early = wt.d0 - dist(b.x, b.z, wt.pt.x, wt.pt.z) >= 0.03 && dist(b.x, b.z, wt.b0.x, wt.b0.z) >= 0.03;
+      if (b && wt.type === 'pull') early = pullGain(wt, b) >= 0.03 && dist(b.x, b.z, wt.b0.x, wt.b0.z) >= 0.03;
       if (API.time < wt.t1 && !early) continue;
       watches.splice(i, 1);
       if (!b) continue;
@@ -11344,14 +11647,30 @@ G.game = (function () {
         var mv = dist(b.x, b.z, wt.b0.x, wt.b0.z);
         if (mv >= 0.04) { var dir = sideOf(b.x, b.z, wt.b0.x, wt.b0.z); moved('push', dir, wt.side, mv); }
       } else if (wt.type === 'pull') {
-        var d1 = dist(b.x, b.z, wt.pt.x, wt.pt.z), mv2 = dist(b.x, b.z, wt.b0.x, wt.b0.z);
-        if (wt.d0 - d1 >= 0.03 && mv2 >= 0.03) moved('pull', sideOf(b.x, b.z, wt.b0.x, wt.b0.z), wt.side, mv2);
+        var mv2 = dist(b.x, b.z, wt.b0.x, wt.b0.z);
+        if (pullGain(wt, b) >= 0.03 && mv2 >= 0.03) moved('pull', sideOf(b.x, b.z, wt.b0.x, wt.b0.z), wt.side, mv2);
+        else if (wt.d0 - dist(b.x, b.z, wt.pt.x, wt.pt.z) >= 0.03) log('pull-drift', { d0: r3(wt.d0), gain: r3(pullGain(wt, b)) });
       } else if (wt.type === 'branch') {
+        // FIX(PLAY-2): the flow measured at the junction never credits the first turn (that is the cup itself turning into the
+        // open branch: boat:region from M / J, in onBus). It shows as a ring where the surge turns, and after the cup has
+        // turned once and the dam was moved over, the same wring's water taking the other branch is the "different course".
         var open = wt.dam === 'E' ? 'S' : 'ET', qo = open === 'S' ? wt.qS : wt.qE, qc = open === 'S' ? wt.qE : wt.qS;
         log('branch-flow', { open: open, qOpen: r3(qo * 1e6), qClosed: r3(qc * 1e6) });
-        if (qo > 0.00003 && qo > 2 * qc) branchTaken(open, 'flow');
+        if (qo > 0.00003 && qo > 2 * qc) {
+          var mp = open === 'S' ? { x: 0.125, z: -0.15 } : { x: 0.235, z: -0.25 }; fxRipple(mp.x, surfY(mp.x, mp.z), mp.z, 0.07, 0.8);
+          if (API.disc.d3.turn != null) branchTaken(open, 'flow');
+        }
       }
     }
+  }
+  function feeding() { var w = W(); return !!(w && w.spouts && ((w.spouts.A && w.spouts.A.on) || (w.spouts.B && w.spouts.B.on))); }
+  // approach toward the cloth beyond the drift the cup already had (its velocity toward the reach at the absorb, for up to
+  // 3.5 s); zero when the cup started outside the absorb's working range (> 30 cm)
+  function pullGain(wt, b) {
+    if (wt.d0 > 0.30 || wt.fed || feeding()) return 0;   // a running feed's current, not the cloth, would be carrying the cup
+    var ux = (wt.pt.x - wt.b0.x) / (wt.d0 || 1), uz = (wt.pt.z - wt.b0.z) / (wt.d0 || 1);
+    var vin = Math.max(0, wt.v0.x * ux + wt.v0.z * uz), tt = Math.min(3.5, API.time - wt.t0);
+    return wt.d0 - dist(b.x, b.z, wt.pt.x, wt.pt.z) - vin * 2.5 * (1 - Math.exp(-tt / 2.5));   // drift that slowly dies away
   }
   function moved(kind, dir, side, mv) {
     var D = API.disc.d1;
@@ -11382,10 +11701,13 @@ G.game = (function () {
       var fresh = !dockSt.docked && (dockSt.undockT < -90 || API.time - dockSt.undockT > 5);
       dockSt.docked = true;
       if (!fresh) return;
-      mark('d6', 'dock'); success('dock'); cycleEnd();
+      // FIX(PLAY-7): the landing completes discovery 6 only after a lap and the return to the channel (a landing before any
+      // lap is still a homecoming: success + cycle end)
+      if (API.disc.d6.orbit != null && API.disc.d6.back != null) mark('d6', 'dock');
+      success('dock'); cycleEnd();
     });
     on('boat:undocked', function () { if (dockSt.docked) { dockSt.docked = false; dockSt.undockT = API.time; } });
-    on('boat:orbit', function () { if (API.disc.d6.unplug != null) mark('d6', 'orbit'); });
+    on('boat:orbit', function () { lapDrainId = drainId; if (API.disc.d6.unplug != null) mark('d6', 'orbit'); planDirty = true; });
     on('boat:region', function (d) { if (d.toId != null && L.CHANNEL[d.toId] && d.to !== 'DRAIN') lastChan = d.to; });
     on('boat:region', function (d) {
       var di = clothAt('dam'); if (di == null) return;
@@ -11410,10 +11732,16 @@ G.game = (function () {
     on('drain:closed', function () { planDirty = true; });
   }
   // d6 'back': after the swirl lap, the falling water leaves the cup in a re-appeared channel (or on the dock)
+  // FIX(PLAY-7): seen only once the swirl has let go and the cup has settled (slow, in a channel outside the swirl), after the
+  // lap of this same drain
   function backCheck() {
     var D6 = API.disc.d6, w = W(), b = boat();
-    if (D6.unplug == null || D6.orbit == null || D6.back != null || !b || (w && w.isPond && w.isPond())) return;
-    if (L.CHANNEL[L.regionAt(b.x, b.z)] || b.onDock) mark('d6', 'back');
+    if (D6.unplug == null || D6.orbit == null || D6.back != null || !b || (w && w.isPond && w.isPond()) || !lapThisDrain()) return;
+    if (b.onDock) { mark('d6', 'back'); return; }
+    var reg = L.regionAt(b.x, b.z), vx = w && w.drain ? (w.drain.vortex || 0) : 0, plugged = !!(w && w.isPlugged && w.isPlugged());
+    // (re-plugged mid-drain: the swirl is gone, so a cup at rest by the drain has come back to its channel too)
+    var outOfSwirl = plugged || (reg !== L.R.DRAIN && dist(b.x, b.z, SWIRL.x, SWIRL.z) > 0.06);
+    if (L.CHANNEL[reg] && outOfSwirl && !b.grounded && (b.speed || 0) < 0.02 && vx < 0.05) mark('d6', 'back');
   }
   function bridgeFlowPoint() { var w = W(), r = (w && w.bridge && w.bridge.rim) || 'A', T = L.TUBS.LO[r]; return { x: T.pourTo.x, y: L.TRAY_Y + 0.02, z: T.pourTo.z }; }
   var dockSt = { docked: false, undockT: -99 }, pondFullAt = -1;
@@ -11442,9 +11770,19 @@ G.game = (function () {
       low: !!(w && w.getLevel && !(w.isPond && w.isPond()) && ((b && b.grounded && b.water < 0.4 * BCAP && L.CHANNEL[L.regionAt(b.x, b.z)]) || w.getLevel() < C.W0 - 0.003))
     };
   }
-  function connected(a, b, pond) { return pond || a === b || !!ADJ[a + ',' + b]; }
+  var NEARJ = { M: 1, J: 1, S: 1, ET: 1 };
+  // relax (a snapshot P): M / J / S / ET joined through the junction, except through the branch a dam shuts
+  function connected(a, b, pond, relax) {
+    if (pond || a === b || ADJ[a + ',' + b]) return true;
+    if (!relax || !NEARJ[a] || !NEARJ[b]) return false;
+    var shut = relax.damSide === 'E' ? 'ET' : (relax.damSide === 'S' ? 'S' : null);
+    return a !== shut && b !== shut;
+  }
+  // FIX(PLAY-8): a reach with (almost) no water within the absorb radius cannot draw anything (the dry M head at M1)
+  function reachWet(f) { var w = W(); if (!w || !w.available) return true; var v = safe('available', function () { return w.available(f.reach.x, f.reach.z, C.REACH_ABSORB_R); }); return !(typeof v === 'number' && v < 0.00002); }
   // candidate water moves on the boat: push (wring) / pull (absorb) from the footholds, with a crude predicted displacement
-  function moves(P, mode) {
+  // (relax: reaches in M / J / S / ET count as joined through the junction, for drawing the cup back to it)
+  function moves(P, mode, relax) {
     var b = P.b, out = []; if (!b) return out;
     for (var i = 0; i < FHS.length; i++) {
       var f = FHS[i], r = f.reach, rr, d, disp = null;
@@ -11455,7 +11793,7 @@ G.game = (function () {
         } else if (f.kind === 'chan') {
           d = dist(r.x, r.z, b.x, b.z);
           if (d <= C.BOAT_HIT_R + 0.005 || d > 0.25) continue;
-          rr = RN[L.regionAt(r.x, r.z)]; if (!connected(P.reg, rr, P.pond)) continue;
+          rr = RN[L.regionAt(r.x, r.z)]; if (!connected(P.reg, rr, P.pond, relax)) continue;
           var fx0 = r.x - f.x, fz0 = r.z - f.z, fl = Math.sqrt(fx0 * fx0 + fz0 * fz0), ux = (b.x - r.x) / d, uz = (b.z - r.z) / d;
           if (ux * fx0 / fl + uz * fz0 / fl < Math.cos(1.75)) continue;
           var dx = ux, dz = uz; if (P.pond) { dx = 3 * fx0 / fl + ux; dz = 3 * fz0 / fl + uz; var dl = Math.sqrt(dx * dx + dz * dz); dx /= dl; dz /= dl; }
@@ -11466,7 +11804,8 @@ G.game = (function () {
         d = dist(r.x, r.z, b.x, b.z);
         if (f.kind === 'chan' && d <= C.BOAT_HIT_R) continue;
         if (d < 0.05 || d > 0.30) continue;
-        rr = RN[L.regionAt(r.x, r.z)]; if (!connected(P.reg, rr, P.pond)) continue;
+        rr = RN[L.regionAt(r.x, r.z)]; if (!connected(P.reg, rr, P.pond, relax)) continue;
+        if (!reachWet(f)) continue;
         var k = Math.min(0.10, d - 0.03) / d; disp = { x: (r.x - b.x) * k, z: (r.z - b.z) * k };
       }
       if (failedTry(f.id, b)) continue;
@@ -11475,10 +11814,10 @@ G.game = (function () {
     }
     return out;
   }
-  function bestMove(P, score, modes) {
+  function bestMove(P, score, modes, relax) {
     var best = null, bs = -1e9;
     (modes || ['push', 'pull']).forEach(function (m) {
-      moves(P, m).forEach(function (mv) {
+      moves(P, m, relax).forEach(function (mv) {
         var s = score(mv); if (s === null || s === undefined) return;
         if ((m === 'push' && P.sw) || (m === 'pull' && P.thin)) s += 0.05;       // prefer what she already holds
         s -= Math.abs(mv.f.s - P.s) * 0.02;                                     // and nearer footholds
@@ -11502,16 +11841,23 @@ G.game = (function () {
   // (the nearest foothold whose action right now changes nothing important: peek, pat, a tub, the rack)
   var HARMLESS = { 'peek': 1, 'pat-boat': 1, 'dip': 1, 'wring-tub': 1, 'hang-rack': 1, 'take-rack': 1, 'swap-rack': 1, 'absorb-board': 1 };
   var SPEND = { 'wring-tub': 1, 'hang-rack': 1, 'take-rack': 1, 'swap-rack': 1, 'absorb-board': 1 };
+  var HOLDS = { 'hang-rack': 1, 'take-rack': 1, 'swap-rack': 1 };   // these change what she holds
   function watchGoal(P, why, at) {
-    var best = null, bd = 1e9;
+    var me = { need: 'any', why: why || 'watch', pt: at || 'boat', watch: true };
+    // FIX(PLAY-3): she stands at a foothold that is not re-armed: following the hint there fires nothing at all
+    var n = nearestFH(P.s);
+    if (n.f && n.d <= C.ARRIVE_R && !API.armed[n.f.id]) { me.id = n.f.id; return me; }
+    var best = null, bd = 1e9, busyWater = P.draining || P.pond;
     for (var i = 0; i < FHS.length; i++) {
       var f = FHS[i], d = Math.abs(f.s - P.s); if (d >= bd) continue;
       var r = safe('rule', function () { return rule(f); });
       // INTEGRATION: prefer spots where following the hint spends nothing (peek / pat / dip) over ones that would wring
       // the held cloth out or swap it (a soaked cloth is often what the next step needs)
-      if (r && HARMLESS[r.rule]) { var dd = d + (SPEND[r.rule] ? 0.6 : 0); if (dd < bd) { bd = dd; best = f.id; } }
+      // FIX(PLAY-3): never (while a pond / drain is on) a spot whose action changes what she holds (the rack)
+      if (r && HARMLESS[r.rule] && !(busyWater && HOLDS[r.rule])) { var dd = d + (SPEND[r.rule] ? 0.6 : 0); if (dd < bd) { bd = dd; best = f.id; } }
     }
-    return { id: best || 'LO', need: 'any', why: why || 'watch', pt: at || 'boat', watch: true };
+    me.id = best || 'LO';
+    return me;
   }
   function goal(P) {
     var D = API.disc, b = P.b;
@@ -11521,14 +11867,22 @@ G.game = (function () {
       if (br && br.d <= C.BOAT_HIT_R) return { id: br.f.id, need: 'thin', why: 'absorb-boat', pt: 'boat' };
     }
     if (P.draining) {
-      var nearDock = b && dist(b.x, b.z, L.DOCK.x, L.DOCK.z) < 0.13;
-      if (D.d6.unplug != null && D.d6.replug == null && D.d6.dock == null && D.d6.orbit != null && P.h !== null && !nearDock) return { id: 'DR', need: 'cloth', why: 'replug' };
+      // FIX(PLAY-3): before this drain's lap: watch from where she stands (keeps the cloth for the re-plug); after it: re-plug
+      var nearDock = b && dockReady(b);
+      // (once the channels are back: re-plugging while the pond still stands would only keep the pond)
+      if (D.d6.unplug != null && D.d6.replug == null && D.d6.dock == null && lapThisDrain() && !P.pond && P.h !== null && !nearDock) return { id: 'DR', need: 'cloth', why: 'replug' };
       return watchGoal(P, 'watch-drain', 'boat');
     }
     if (P.pond) return pondGoal(P);
     if (b && (b.onDock || (b.grounded && b.water < 0.4 * BCAP && !L.CHANNEL[L.regionAt(b.x, b.z)]))) return pondMake(P, 'refloat');   // stranded on raised floor: only a pond lifts it
     if (P.low) {                                                   // channels drunk low by many absorbs: the bridge feed refills them
       if (P.bridge === null) return { id: 'BR', need: 'cloth', why: 'refill', avoid: { plug: 1, dam: 1 } };
+      // (while the cup still has to turn at the branch itself, refill through rim B: W -> F raises the level everywhere
+      //  without a current along M / J that would carry the cup away east)
+      if (D.d3.turn == null && NEARJ[P.reg] && cloth(P.bridge).slot === 'A') {
+        if (!P.empty) return { id: 'BR', need: 'cloth', why: 'refill-rim', avoid: { plug: 1, dam: 1 } };
+        return { id: 'BR', need: 'empty', why: 'refill-rim', pt: 'cloth', cloth: P.bridge };
+      }
       return watchGoal(P, 'watch-refill', 'spout');
     }
     if (P.bridge !== null && P.plug !== null) {                    // a pond is filling: let it (on the rim that parks the cup well)
@@ -11539,8 +11893,14 @@ G.game = (function () {
     // the discovery chain; a step with nothing useful to suggest right now (the cup out of reach, a move that did not
     // work) yields to the next discovery and is offered again later
     // the cup resting right at one of her reach points is the moment for the sink / float discovery: take it
-    if (D.d4.done == null && b && !b.grounded && b.speed < 0.02) { var br4 = boatReach(P); if (br4 && br4.d <= C.BOAT_HIT_R + 0.03 && (P.sw || D.d4.fill != null)) { var g4 = d4Goal(P); if (g4) return g4; } }
-    var chain = [['d1', d1Goal], ['d2', d2Goal], ['d3', d3Goal], ['d4', d4Goal]];
+    // (only a step she can do with the cloth as it is: a pre-emption that first wants it wrung off / soaked would fight the
+    //  chain step it interrupts, which wants the opposite)
+    if (D.d4.done == null && b && !b.grounded && b.speed < 0.02) { var br4 = boatReach(P); if (br4 && br4.d <= C.BOAT_HIT_R + 0.03 && (P.sw || D.d4.fill != null)) { var g4 = d4Goal(P); if (g4 && !(g4.need === 'swollen' && !P.sw) && !(g4.need === 'thin' && !P.thin)) return g4; } }
+    // FIX(PLAY-2): the branch (d3) right after the first push / pull, while the cup is still near the junction (the bridge
+    // feed of d2 carries it on to ES, far from the branch); a d3 step it cannot set up yet yields to d2 / d4
+    // (d1 'sides' can come during / after d3: it is the first push and pull that set the scene)
+    if (D.d1.done == null && (D.d1.push == null || D.d1.pull == null)) { var g1 = d1Goal(P); if (g1) return g1; }
+    var chain = [['d3', d3Goal], ['d1', d1Goal], ['d2', d2Goal], ['d4', d4Goal]];
     for (var i = 0; i < chain.length; i++) if (D[chain[i][0]].done == null) { var g = chain[i][1](P); if (g) return g; }
     if (D.d5.done == null || D.d6.done == null) return pondMake(P, 'pond');
     return freeGoal(P);
@@ -11553,7 +11913,13 @@ G.game = (function () {
     }
     if (D.pull == null) {
       var vx = b ? b.vx : 0, vz = b ? b.vz : 0;
-      return bestMove(P, function (mv) { var ahead = (mv.disp.x * vx + mv.disp.z * vz) > 0 ? 0.1 : 0; return ahead - Math.abs(mv.d - 0.17); }, ['pull']);
+      // (while the cup has yet to turn at the branch itself (d3), prefer a pull that keeps it in M / J, west of the junction)
+      var keep = API.disc.d3.turn == null && b && (P.reg === 'M' || P.reg === 'J');
+      return bestMove(P, function (mv) {
+        var ahead = (mv.disp.x * vx + mv.disp.z * vz) > 0 ? 0.1 : 0, s = ahead - Math.abs(mv.d - 0.17);
+        if (keep) { var rg = RN[L.regionAt(b.x + mv.disp.x, b.z + mv.disp.z)]; if (rg !== 'M' && rg !== 'J') s -= 0.3; }
+        return s;
+      }, ['pull']);
     }
     // sides: move it the other way / act from the other side
     var wantDir = null, wantSide = null;
@@ -11561,7 +11927,7 @@ G.game = (function () {
     if (!((D.from.E && D.from.W) || (D.from.N && D.from.S))) wantSide = D.from.E ? 'W' : (D.from.W ? 'E' : (D.from.S ? 'N' : 'S'));
     return bestMove(P, function (mv) { var s = 0; if (wantDir && mv.dir === wantDir) s += 1; if (wantSide && mv.side === wantSide) s += 1; return s - Math.abs(mv.d - 0.15); });
   }
-  function nearestPull(P) { var br = boatReach(P); return br && !failedTry(br.f.id, P.b) ? { id: br.f.id, need: 'thin', why: 'pull-near' } : null; }
+  function nearestPull(P) { var br = boatReach(P); return br && !failedTry(br.f.id, P.b) && reachWet(br.f) ? { id: br.f.id, need: 'thin', why: 'pull-near' } : null; }
   function reachDist(x, z) { var m = 9; FHS.forEach(function (f) { if (f.kind === 'chan') m = Math.min(m, dist(x, z, f.reach.x, f.reach.z)); }); return m; }
   function d2Goal(P) {
     var D = API.disc.d2;
@@ -11574,11 +11940,38 @@ G.game = (function () {
     }
     return { id: 'BR', need: 'cloth', why: 'rehang', avoid: { plug: 1 } };
   }
+  // FIX(PLAY-2): the first d3 turn is the cup itself turning at the branch: it waits west of the junction (M / J) for the
+  // wring on the board while the dam lies on one side (brought there first if it is elsewhere; if it cannot be brought now,
+  // d3 waits and the other discoveries go first). Then the dam moves to the other side and the same wring on the board takes
+  // the other course (seen by the cup when it is at the junction, else by the water running into the other branch).
+  var MJ_PT = { x: 0.03, z: -0.25 }, bring3Times = [];
+  function cupZone(P) { var r = P.reg; if (!P.b || P.pond) return null; if (r === 'M' || r === 'J') return 'MJ'; if (r === 'S' || r === 'ET') return r; return 'far'; }
+  function bringMJ(P) {
+    var b = P.b; if (!b || b.grounded) return null;
+    if (bring3Times.filter(function (t) { return API.time - t < 120; }).length >= 8) return null;   // tried enough for now: back later
+    var d0 = dist(b.x, b.z, MJ_PT.x, MJ_PT.z);
+    var mv = bestMove(P, function (m) { var g = d0 - dist(b.x + m.disp.x, b.z + m.disp.z, MJ_PT.x, MJ_PT.z); return g > 0.03 ? 2 * g : null; }, ['pull', 'push'], P);
+    if (mv) { mv.why = 'bring3-' + mv.why; mv.avoid = { dam: 1, plug: 1 }; }
+    return mv;
+  }
   function d3Goal(P) {
-    var D = API.disc.d3;
-    if (D.dam == null || P.dam === null) return { id: 'J', need: P.dam === null ? 'swollen' : 'cloth', why: D.dam == null ? 'dam' : 'dam-again', avoid: { bridge: 1, plug: 1 } };
-    if (D.turn == null) return { id: 'WB', need: 'swollen', why: 'turn', avoid: { dam: 1 } };
-    if (D.swap == null) return { id: 'J', need: 'cloth', why: 'swap', avoid: { dam: 1 } };
+    var D = API.disc.d3, z = cupZone(P), b = P.b;
+    if (!z) return null;
+    if (D.turn == null) {
+      if (P.dam === null) {
+        if (z !== 'MJ') { var bt = bringMJ(P); if (bt) return bt; if (D.dam != null || z === 'far' || z === (API.damNext === 'S' ? 'S' : 'ET')) return null; }
+        return { id: 'J', need: 'swollen', why: D.dam == null ? 'dam' : 'dam-again', avoid: { bridge: 1, plug: 1 } };
+      }
+      var closed = P.damSide === 'E' ? 'ET' : 'S';
+      if (z === 'MJ' && !b.grounded) {
+        if (!failedTry('WB', b)) return { id: 'WB', need: 'swollen', why: 'turn', avoid: { dam: 1 } };
+        return bringMJ(P);
+      }
+      if (z === closed) return { id: 'J', need: 'cloth', why: 'dam-side', avoid: { dam: 1 } };   // shut in behind the dam: open its branch
+      return bringMJ(P);                                       // in the open branch / farther: draw it back (null: d3 waits)
+    }
+    if (P.dam === null) return { id: 'J', need: 'swollen', why: 'dam-again', avoid: { bridge: 1, plug: 1 } };
+    if (P.damSide === D.side) return { id: 'J', need: 'cloth', why: 'swap', avoid: { dam: 1 } };
     return { id: 'WB', need: 'swollen', why: 'turn2', avoid: { dam: 1 } };
   }
   function d4Goal(P) { var g = d4Inner(P); if (g && P.b && P.plug !== null && dist(P.b.x, P.b.z, L.DRAIN.x, L.DRAIN.z) < 0.25) { g.avoid = g.avoid || {}; g.avoid.plug = 1; } return g; }
@@ -11712,11 +12105,8 @@ G.game = (function () {
     var b = P.b; if (!b) return null;
     var r = P.reg;
     var D6 = API.disc.d6;
-    if (API.disc.d5.crossed != null && D6.orbit == null) {   // measured: F -> rim B parks it by the swirl, lower ES -> rim A keeps it there
-      if (r === 'F' || (r === 'DRAIN' && b.x < 0.37)) return 'B';
-      if (r === 'DRAIN' || (r === 'ES' && b.z > 0.05)) return 'A';
-      return null;
-    }
+    // FIX(O1): for the swirl lap any rim will do: the draining pond's current carries the cup to the swirl from anywhere
+    if (API.disc.d5.crossed != null && D6.orbit == null) return null;
     // crossing (and later the homecoming, which starts with the same push over the island): park it in ES / J
     if (r === 'DRAIN' || r === 'S' || (r === 'ES' && b.z > -0.02)) return 'B';
     return null;                                         // north channels: either rim; F / W: pulled into ES first (pondPrep)
@@ -11733,7 +12123,11 @@ G.game = (function () {
     if (P.bridge === null) return { id: 'BR', need: 'cloth', why: why + '-bridge', avoid: { plug: 1 } };
     return watchGoal(P, 'watch-pond', 'island');
   }
-  function dockScore(x, z) { return dist(x, z, DOCKP.x, DOCKP.z); }
+  var dockMissAt = -999;
+  function dockScore(x, z) { DOCKP = DOCKP || { x: L.DOCK.x, z: L.DOCK.z }; return Math.max(Math.abs(x - DOCKP.x), Math.abs(z - DOCKP.z)); }
+  // FIX(O1): over the cradle (inside its rim) the cup is sheltered from the draining current and lands as the water falls;
+  // anywhere else the current carries it to the swirl
+  function dockReady(b) { return !!b && dockScore(b.x, b.z) <= 0.09; }   // measured: every start within 9.5 cm lands
   function pondGoal(P) {
     var D5 = API.disc.d5, D6 = API.disc.d6, b = P.b; if (!b) return watchGoal(P);
     if (b.speed > 0.02 && API.time - lastWaterAct < 8) return watchGoal(P, 'watch-cup', 'boat');   // let the cup settle before choosing the next push
@@ -11749,17 +12143,25 @@ G.game = (function () {
     // landing on the dry dock: cup over the cradle, bridge off, then pull the plug
     var wantDock = D6.unplug != null && D6.orbit != null && D6.back != null && D6.dock == null;
     if (D6.done != null && API.disc.order.length === 6) wantDock = true;
+    // VERIFY(dock): after a homecoming (cycle end) the refloated cup is not steered straight back onto the cradle (that
+    // repeated the same landing every ~70 s); it sails out and the next drain is a lap again
+    var homeDone = API.cycle >= 1 && D6.done != null;
+    if (homeDone) wantDock = false;
     if (wantDock) {
-      if (dockScore(b.x, b.z) <= 0.10) {                          // measured: from within ~10 cm the cradle catches the cup as the water falls
+      if (dockReady(b)) {                                          // inside the cradle's rim: it lands as the water falls
         if (P.bridge !== null) return { id: 'BR', need: 'empty', why: 'lift-for-dock', pt: 'cloth', cloth: P.bridge, avoid: { plug: 1 } };
         return unplug;
       }
-      var sk = steer(P, dockScore, 0.02);
+      var sk = steer(P, function (x, z) { return dist(x, z, L.DOCK.x, L.DOCK.z); }, 0.02);   // (smooth distance to steer by)
       if (sk) return pushGoal(sk, 'to-dock');
+      if (P.plug !== null) dockMissAt = API.time;          // no push brings it nearer: this drain will be a lap, not a landing
     }
-    // the swirl lap needs the cup near the drain when the plug comes out
-    if (D6.orbit == null && dist(b.x, b.z, SWIRL.x, SWIRL.z) > 0.11) {
-      var sd = steer(P, function (x, z) { return dist(x, z, SWIRL.x, SWIRL.z); }, 0.03);
+    // a cup heavy with water would ground on the strainer before its lap: drink it out first when it is in reach
+    if (D6.orbit == null && b.water > 0.3 * BCAP) { var brw = boatReach(P); if (brw && brw.d <= C.BOAT_HIT_R) return { id: brw.f.id, need: 'thin', why: 'absorb-boat', pt: 'boat' }; }
+    // FIX(O1): the draining pond's current carries the cup to the swirl from anywhere on the connected water, except from
+    // inside the dock cradle (sheltered): only then push it out first
+    if ((D6.orbit == null || homeDone) && dockScore(b.x, b.z) <= 0.10) {
+      var sd = steer(P, function (x, z) { return dist(x, z, SWIRL.x, SWIRL.z) + (dockScore(x, z) <= 0.10 ? 1 : 0); }, 0.03);
       if (sd) return pushGoal(sd, 'to-drain');
     }
     return unplug;
@@ -11767,7 +12169,8 @@ G.game = (function () {
   function freeGoal(P) {
     var b = P.b;
     // after the six: first a homecoming (pond -> cup over the dock -> drain), then alternate pushes / pulls and new ponds
-    if (API.cycle === 0) return pondMake(P, 'pond');
+    // (a landing attempt that could not steer the cup over the cradle: other play first for a while, then try again)
+    if (API.cycle === 0 && API.time - dockMissAt > 80) return pondMake(P, 'pond');
     var k = Math.floor(API.time / 40) % 3;
     if (k === 2) return pondMake(P, 'free');
     var mv = bestMove(P, function (m) { return -Math.abs(m.d - 0.15); });
@@ -11788,10 +12191,12 @@ G.game = (function () {
     if (P.empty) {
       var avoid = g.avoid || {}, best = null, bd = 1e9;
       if (P.low && g.why !== 'lift') { avoid = Object.assign({}, avoid); avoid.bridge = 1; }
+      // FIX(PLAY-9): keep the pick-up spot already shown unless the other one is clearly (0.5 m of walkway) nearer
+      var curPick = HNT.cur && /^pick:/.test(HNT.cur.why || '') ? HNT.cur.id : null;
       CL().forEach(function (c, i) {
         if (c.place === 'hand' || avoid[c.place]) return;
         var id = PICK_FH[c.place]; if (!id) return;
-        var d = Math.abs(L.FH[id].s - P.s) + (id === g.id ? -0.05 : 0);
+        var d = Math.abs(L.FH[id].s - P.s) + (id === g.id ? -0.05 : 0) + (id === curPick ? -0.5 : 0);
         if (d < bd) { bd = d; best = { id: id, need: 'empty', why: 'pick:' + g.why, pt: 'cloth', cloth: i, then: g.id }; }
       });
       if (!best) CL().forEach(function (c, i) { if (!best && c.place !== 'hand' && PICK_FH[c.place]) best = { id: PICK_FH[c.place], need: 'empty', why: 'pick:' + g.why, pt: 'cloth', cloth: i, then: g.id }; });
@@ -11810,7 +12215,8 @@ G.game = (function () {
     }
     if (need === 'thin' && !P.thin) {
       var offs = ['HI', 'LO'], bb = P.b;
-      if (API.disc.d1.done == null && !P.pond && bb && !((P.reg === 'M' || P.reg === 'J') && bb.x < 0.22)) offs.push('WB');   // early on the board is near and harmless
+      // early on the board is near and harmless (not while the cup is in M / J / ET / S: its surge would push the cup on east)
+      if (API.disc.d1.done == null && !P.pond && bb && !NEARJ[P.reg]) offs.push('WB');
       return { id: nearestFHOf(offs, P), need: 'swollen', why: 'wringoff:' + g.why, then: g.id };
     }
     return g;
@@ -11836,24 +12242,45 @@ G.game = (function () {
     else if (f.kind === 'lo') y = tubY('LO');
     return { x: r.x, y: y, z: r.z };
   }
+  // FIX(V2b): a "watch" hint asks for nothing: its droplet floats clear above the cup (never on it) and there is no floor ring
+  // (one marked place only). The lift keeps the droplet's centre >= half a droplet + the cup's half height + a gap above the cup
+  // on screen, whatever the droplet's size.
+  function watchLift(p) {
+    var sc = scene(); if (!sc) return 0.12;
+    var a = sc.project(p.x, p.y, p.z), up = sc.project(p.x, p.y + 0.1, p.z), side = sc.project(p.x + 0.1, p.y, p.z);
+    var ppy = Math.abs(a.y - up.y) / 0.1, ppm = Math.hypot(side.x - a.x, side.y - a.y) / 0.1;
+    if (!(ppy > 1) || !(ppm > 1)) return 0.12;
+    var size = clamp(38 / ppm, 0.026, 0.17), dropPx = size * ppm, cupPx = 0.03 * ppm;
+    var want = 0.5 * dropPx + cupPx + 10, own = size * 1.35 * ppy;   // the marker already floats 1.35 sizes above its point
+    return clamp((want - own) / ppy, 0.03, 0.30);
+  }
   function pushHint(force) {
     var h = HNT.cur; if (!h) return;
     var p = hintPoint(h), f = L.FH[h.id];
     var moved = !HNT.pt || dist(p.x, p.z, HNT.pt.x, HNT.pt.z) > 0.015 || Math.abs(p.y - HNT.pt.y) > 0.006;
     if (!moved && !force) return;
     HNT.pt = p;
-    API.hint = { id: h.id, need: h.need, why: h.why, goal: h.goal, x: r3(p.x), y: r3(p.y), z: r3(p.z), fx: f.x, fz: f.z, since: r3(HNT.since) };
+    var shown = { x: p.x, y: p.y, z: p.z, fx: f.x, fz: f.z };
+    if (h.watch) { shown.fx = null; shown.fz = null; if (h.pt === 'boat') shown.y = p.y + watchLift(p); }
+    API.hint = { id: h.id, need: h.need, why: h.why, goal: h.goal, x: r3(p.x), y: r3(p.y), z: r3(p.z), fx: f.x, fz: f.z, since: r3(HNT.since), watch: !!h.watch, shownY: r3(shown.y) };
     var sc = G.scene;
-    if (sc && sc.setHint) safe('setHint', function () { sc.setHint({ x: p.x, y: p.y, z: p.z, fx: f.x, fz: f.z }); });
+    if (sc && sc.setHint) safe('setHint', function () { sc.setHint(shown); });
   }
+  var lastContactAt = -99, holdBypass = false, heldInvalid = false;
   function updatePlan(dt) {
     planT -= dt;
     if (planT > 0 && !planDirty) return;
     planT = PLAN_DT;
     var key = stateKey(), p = safe('plan', plan);
     if (!p || !L.FH[p.id]) p = HNT.cur || { id: 'WB', need: 'any', why: 'fallback' };
-    var invalid = !HNT.cur || key !== HNT.key || planDirty;
+    var invalid = !HNT.cur || key !== HNT.key || planDirty || heldInvalid;
     planDirty = false; HNT.key = key;
+    // FIX(V10): while she is acting (and ~1 s after the contact) the marker stays where the action is: the effect plays out
+    // before it glides on to the next target
+    var gg = GL(), acting = !holdBypass && (gg.busy || !!API.pending || API.time - lastContactAt < 1.0);
+    holdBypass = false;
+    if (acting && HNT.cur && p.id !== HNT.cur.id) { heldInvalid = heldInvalid || invalid; planT = 0.1; pushHint(false); return; }
+    heldInvalid = false;
     if (!HNT.cur || p.id !== HNT.cur.id) {
       if (invalid || API.time - HNT.since >= HINT_HOLD) {
         HNT.cur = p; HNT.since = API.time; HNT.pt = null;
@@ -11869,7 +12296,9 @@ G.game = (function () {
   function updateGaze() {
     var g = G.girl; if (!g || !g.lookAt || !g.ready) return;
     if (!gazeInit) { gazeInit = true; safe('look', function () { g.lookAt(function () { return HNT.pt ? [HNT.pt.x, HNT.pt.y + 0.02, HNT.pt.z] : null; }, 1); }); }
-    var b = boat(), want = !!b && b.speed > 0.03 && API.time - lastWaterAct < 6;
+    // FIX(PLAY-4): after the plug comes out she keeps her eyes on the cup while the swirl carries it (lap included)
+    var w = W(), swirling = !!(w && w.drain && !w.drain.plugged && (w.drain.vortex > 0.05 || w.drain.drift > 0.05));
+    var b = boat(), want = !!b && b.speed > 0.03 && (API.time - lastWaterAct < 6 || swirling);
     if (want !== gazeBoat) {
       gazeBoat = want;
       safe('look', function () { g.lookAt(want ? function () { var bb = boat(); return bb ? [bb.x, (bb.surfY || bb.y) + 0.01, bb.z] : null; } : null, 2); });
@@ -12100,10 +12529,10 @@ G.game = (function () {
   API.init = init; API.update = update; API.draw2d = draw2d; API.resize2d = resize2d; API.onHidden = onHidden;
   API.walkTo = walkTo; API.teleport = teleport; API.rule = function (id) { var r = rule(L.FH[id]); return { rule: r.rule, act: r.act }; };
   API.plan = plan; API.syncWater = syncWater; API.state = state; API.setTarget = setTarget; API.nearestFH = function (s) { var n = nearestFH(s); return { id: n.f.id, d: n.d }; };
-  API.meta = meta; API.cancelInput = cancelAll; API.forcePlan = function () { planDirty = true; HNT.since = -99; updatePlan(0); };
+  API.meta = meta; API.cancelInput = cancelAll; API.forcePlan = function () { planDirty = true; HNT.since = -99; holdBypass = true; updatePlan(0); };
   API.startDemo = function () { return startDemo(); }; API.stopDemo = stopDemo;
   API.idle = idle; API.saveRim = saveRim; API.loadRim = loadRim;
-  API._dbg = { pondPushes: function (x, z) { return pondPushes({ x: x, z: z }, true).map(function (m) { return { id: m.f.id, d: r3(m.d), x: r3(m.x), z: r3(m.z), cross: m.cross, over: m.over, ch: m.ch }; }); }, tries: tries, snapshot: snapshot };
+  API._dbg = { boatTap: function (x, y) { return boatTapNotGirl(x, y); }, pondPushes: function (x, z) { return pondPushes({ x: x, z: z }, true).map(function (m) { return { id: m.f.id, d: r3(m.d), x: r3(m.x), z: r3(m.z), cross: m.cross, over: m.over, ch: m.ch }; }); }, tries: tries, snapshot: snapshot };
   return API;
 })();
 
