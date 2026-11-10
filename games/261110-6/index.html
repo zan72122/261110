@@ -1150,6 +1150,7 @@ function resize(){
   if(portrait){LAY.sample=[4.0,7.8];LAY.mem=[[1.35,7.9],[-1.3,7.9],[-3.95,7.9],[-6.5,7.9]];LAY.lamp=[-7.6,-8.4];}
   else{LAY.sample=[4.4,-7.7];LAY.mem=[[1.75,-7.8],[-0.9,-7.8],[-3.55,-7.8],[-6.2,-7.8]];LAY.lamp=[-8.9,-7.6];}
   fitCamera();
+  try{if(G.kind)G.last=null;}catch(e){}
 }
 function camAt(target,dist,el,az,asp,fov){
   const eye=[target[0]+dist*Math.cos(el)*Math.sin(az),target[1]+dist*Math.sin(el),target[2]+dist*Math.cos(el)*Math.cos(az)];
@@ -1168,7 +1169,7 @@ function fitPts(){
 function fitCamera(){
   const W=LAY.W,H=LAY.H,asp=W/H,fov=30*DEG,sa=LAY.sa;
   const el=(LAY.portrait?63:55)*DEG,az=0;
-  const mx=LAY.portrait?0.012:0.025,mL=(sa[3]+W*mx)/W*2,mR=(sa[1]+W*mx)/W*2,mT=(sa[0]+H*0.03)/H*2,mB=(sa[2]+H*0.03)/H*2;
+  const mx=LAY.portrait?0.02:0.025,mL=(sa[3]+W*mx)/W*2,mR=(sa[1]+W*mx)/W*2,mT=(sa[0]+H*0.03)/H*2,mB=(sa[2]+H*0.03)/H*2;
   const pts=fitPts();let target=[0.2,0,0.3],dist=40,cam=null;
   for(let it=0;it<4;it++){
     let lo=5,hi=200;
@@ -1429,7 +1430,8 @@ function handleInfo(){
 function hitTest(x,y){
   const minR=Math.max(34,Math.min(LAY.W,LAY.H)*0.055);
   let best=null,bd=1e9;
-  for(const h of handleInfo()){const s=toScreen(h.p),R=Math.max(minR,projR(h.p,h.r)+14),d=Math.hypot(s[0]-x,s[1]-y);if(d<R&&d/R<bd){bd=d/R;best=h.kind;}}
+  const gt=st.guide&&st.guide.t;
+  for(const h of handleInfo()){const s=toScreen(h.p),R=Math.max(minR,projR(h.p,h.r)+14),d=Math.hypot(s[0]-x,s[1]-y),sc=d/R*(h.kind===gt?0.7:1);if(d<R&&sc<bd){bd=sc;best=h.kind;}}
   if(best)return {kind:best};
   // sketchbook knob before unlock: only a wobble
   {const k=[L.K[0],0.4,L.K[1]],s=toScreen(k);if(Math.hypot(s[0]-x,s[1]-y)<minR)return {kind:'wobble',obj:'bknob'};}
@@ -1502,6 +1504,7 @@ window.addEventListener('pointermove',onMove,{passive:false});
 window.addEventListener('pointerup',(e)=>release(e,false));
 window.addEventListener('pointercancel',(e)=>release(e,true));
 cv.addEventListener('lostpointercapture',(e)=>{if(e.pointerId===G.id)release(e,true);});
+document.addEventListener('touchend',()=>auInit(),{passive:true});document.addEventListener('pointerup',()=>auInit(),{passive:true});
 for(const ev of['touchstart','touchmove','touchend','gesturestart','gesturechange','gestureend','dblclick','contextmenu','selectstart','dragstart'])
   document.addEventListener(ev,(e)=>{if(e.cancelable)e.preventDefault();},{passive:false});
 document.addEventListener('wheel',(e)=>{if(e.cancelable)e.preventDefault();},{passive:false});
