@@ -3911,7 +3911,7 @@ scene.background = new T.Color(0xa9cfd8);
 scene.fog = new T.Fog(0xa9cfd8, 140, 260);
 const pmrem = new T.PMREMGenerator(renderer);
 // environment reflections only on glossy materials (lids, balls, lacquer, metal): keeps old iPads fast
-const ENV = pmrem.fromScene(new T.RoomEnvironment(), 0.04).texture;
+let ENV = pmrem.fromScene(new T.RoomEnvironment(), 0.04).texture;
 
 const camera = new T.PerspectiveCamera(30, 1, 5, 400);
 // morning sun through an east window (screen right, slightly behind)
@@ -3950,11 +3950,15 @@ function safeInsets() {
   return { t: v('paddingTop'), r: v('paddingRight'), b: v('paddingBottom'), l: v('paddingLeft') };
 }
 // adaptive resolution: start at min(dpr, 2); step down if frames are slow (never above 2)
-const RES = { scale: 1, slow: 0, fast: 0 };
+const RES = { scale: 1, slow: 0, fast: 0, hist: [], base: 16.7 };
 function pixelRatio() { return Math.max(1, Math.min(DPR_MAX, window.devicePixelRatio || 1) * RES.scale); }
 function adaptResolution(frameMs) {
-  if (frameMs > 24) { RES.slow++; RES.fast = 0; } else if (frameMs < 13) { RES.fast++; RES.slow = 0; } else { RES.slow = Math.max(0, RES.slow - 1); }
-  if (RES.slow > 90 && pixelRatio() > 1) { RES.scale = Math.max(0.5, RES.scale - 0.15); RES.slow = 0; frameCamera(); }
+  // baseline = best recent interval (the display / power-mode cap). A steady 30 fps cap is not "slow".
+  RES.hist.push(frameMs); if (RES.hist.length > 120) RES.hist.shift();
+  if (RES.hist.length >= 30) { const sorted = RES.hist.slice().sort((a, b) => a - b); RES.base = sorted[Math.floor(sorted.length * 0.1)]; }
+  const slowAt = Math.max(24, RES.base * 1.35), fastAt = RES.base * 1.12;
+  if (frameMs > slowAt) { RES.slow++; RES.fast = 0; } else if (frameMs < fastAt) { RES.fast++; RES.slow = Math.max(0, RES.slow - 2); } else { RES.slow = Math.max(0, RES.slow - 1); }
+  if (RES.slow > 90 && pixelRatio() > 1) { RES.scale = Math.max(0.5, RES.scale - 0.15); RES.slow = 0; RES.hist.length = 0; frameCamera(); }
   else if (RES.fast > 600 && RES.scale < 1) { RES.scale = Math.min(1, RES.scale + 0.1); RES.fast = 0; frameCamera(); }
 }
 function fitDistance(dir, tgt, corners, sx0, sx1, sy0, sy1) {
@@ -4102,13 +4106,14 @@ const MAT = {
   bag: new T.MeshLambertMaterial({ map: TEX.bag, side: T.DoubleSide }),
   bagInner: new T.MeshLambertMaterial({ color: 0x23365a, side: T.BackSide }),
   wiper: new T.MeshLambertMaterial({ map: TEX.wiper }),
-  water: new T.MeshStandardMaterial({ color: 0xdff3ff, transparent: true, opacity: 0.78, roughness: 0.02, metalness: 0.35, envMapIntensity: 3, depthWrite: false }),
+  water: new T.MeshStandardMaterial({ color: 0xcfeaff, transparent: true, opacity: 0.55, roughness: 0.0, metalness: 0.5, envMapIntensity: 3, depthWrite: false }),
   shuFloor: new T.MeshPhongMaterial({ color: 0x9c2f1f, specular: 0x5a3a30, shininess: 60 }),
   clasp: new T.MeshPhongMaterial({ color: 0x8fd0e8, specular: 0x666666, shininess: 70 }),
   claspBase: new T.MeshPhongMaterial({ color: 0xd9eef5, specular: 0x444444, shininess: 50 }),
   shadowCatcher: new T.ShadowMaterial({ opacity: 0.18 }),
 };
-for (const k of ['lid', 'lidEdge', 'shu', 'metal', 'brass', 'knob', 'water']) { MAT[k].envMap = ENV; }
+const ENV_MATS = ['lid', 'lidEdge', 'shu', 'metal', 'brass', 'knob', 'water'].map(k => MAT[k]);
+for (const m of ENV_MATS) m.envMap = ENV;
 MAT.lid.envMapIntensity = 1.4; MAT.lidEdge.envMapIntensity = 1.2; MAT.shu.envMapIntensity = 0.55; MAT.knob.envMapIntensity = 0.6; MAT.metal.envMapIntensity = 0.9; MAT.brass.envMapIntensity = 0.9; MAT.water.envMapIntensity = 1.6;
 
 // ===================================================================
@@ -4117,8 +4122,10 @@ MAT.lid.envMapIntensity = 1.4; MAT.lidEdge.envMapIntensity = 1.2; MAT.shu.envMap
 const Sound = (() => {
   let ctx = null, master = null, comp = null, noiseBuf = null, ok = false;
   const rollers = new Map();
+  let hidden = false;
+  function wake() { if (ctx && !hidden && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {}); }
   function init() {
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); return; }
+    if (ctx) { wake(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     try {
@@ -4134,11 +4141,15 @@ const Sound = (() => {
       for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b = 0.97 * b + 0.03 * w; d[i] = w * 0.6 + b * 2.2; }
       // iOS unlock: play a silent buffer inside the gesture
       const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, 22050); s.connect(ctx.destination); s.start(0);
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      // play through the iPhone silent switch (Safari 16.4+), otherwise first-touch sound can be inaudible
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {}
+      ctx.onstatechange = () => { /* 'interrupted' (calls, Siri) is retried on the next touch via wake() */ };
+      wake();
       ok = true;
     } catch (e) { ctx = null; ok = false; }
   }
-  function ready() { return ok && ctx && ctx.state === 'running'; }
+  // one-shots are scheduled even while the context is still unlocking; they sound as soon as it runs
+  function ready() { return ok && ctx && ctx.state !== 'closed'; }
   function now() { return ctx.currentTime; }
   function env(g, t, a, peak, dec, sus = 0.0001) {
     g.gain.cancelScheduledValues(t);
@@ -4310,8 +4321,8 @@ const Sound = (() => {
       r.lfo.frequency.setTargetAtTime(2 + v / 7, t, 0.05);
     },
     state() { return ctx ? ctx.state : 'none'; },
-    suspend() { if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {}); },
-    resume() { if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {}); },
+    suspend() { hidden = true; if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {}); },
+    resume() { hidden = false; wake(); },
     silenceRollers() { if (!ctx) return; const t = now(); rollers.forEach(r => { r.g.gain.setTargetAtTime(0, t, 0.02); r.og.gain.setTargetAtTime(0, t, 0.02); }); },
   };
   return api;
@@ -4415,6 +4426,7 @@ class Ball {
     this.mesh = new T.Mesh(new T.SphereGeometry(BALL_R, 36, 24),
       new T.MeshPhysicalMaterial({ map: ballTexture(hex, dot), roughness: 0.16, clearcoat: 1, clearcoatRoughness: 0.05, envMap: ENV, envMapIntensity: 1.0 }));
     this.mesh.castShadow = true; this.mesh.receiveShadow = false;
+    ENV_MATS.push(this.mesh.material);
     this.mesh.renderOrder = 3;
     this.pos = this.mesh.position;
     this.v = 0; this.moving = false; this.loc = 'queue';
@@ -4639,7 +4651,7 @@ function makeLever(armLen) {
   const stickPivot = new T.Group(); stickPivot.rotation.x = 0.55; axle.add(stickPivot);
   const stick = mesh(new T.CylinderGeometry(0.42, 0.55, armLen, 14), MAT.wood); stick.rotation.x = Math.PI / 2; stick.position.z = armLen / 2; stickPivot.add(stick);
   const knobG = new T.Group(); knobG.position.set(0, 0, armLen + 1.2); stickPivot.add(knobG);
-  const pad = mesh(new T.RoundedBoxGeometry(4.8, 1.6, 3.4, 4, 0.75), MAT.knob); pad.rotation.x = -0.55; knobG.add(pad);
+  const pad = mesh(new T.RoundedBoxGeometry(5.6, 1.8, 3.8, 4, 0.8), MAT.knob); pad.rotation.x = -0.55; knobG.add(pad);
   const ring = mesh(new T.CylinderGeometry(0.75, 0.75, 1.1, 16), MAT.brass); ring.rotation.x = Math.PI / 2; ring.position.z = -1.5; knobG.add(ring);
   const knob = pad;
   const arm = stick;
@@ -4753,14 +4765,15 @@ function rice(w, d, h) {
   for (const t of [col, bump]) { t.needsUpdate = true; t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(iw / 3.2, id / 3.2); }
   const base = new T.Mesh(geo, new T.MeshPhongMaterial({ map: col, bumpMap: bump, bumpScale: 1.4, specular: 0x6b6a66, shininess: 46 }));
   base.receiveShadow = true; g.add(base);
-  const n = 240;
-  const grain = new T.CapsuleGeometry(0.12, 0.3, 1, 6);
+  const n = 200;
+  const grain = new T.CapsuleGeometry(0.1, 0.26, 1, 6);
   const im = new T.InstancedMesh(grain, new T.MeshPhongMaterial({ color: 0xfdfcf8, specular: 0x9a9a94, shininess: 70 }), n);
-  const m4 = new T.Matrix4(), q = new T.Quaternion(), e = new T.Euler(), p = new T.Vector3(), sc = new T.Vector3(1, 1, 1);
+  const m4 = new T.Matrix4(), q = new T.Quaternion(), e = new T.Euler(0, 0, 0, 'YXZ'), p = new T.Vector3(), sc = new T.Vector3(1, 1, 1);
   for (let i = 0; i < n; i++) {
     const x = (RND() * 2 - 1) * iw * 0.96, z = (RND() * 2 - 1) * id * 0.96;
-    p.set(x, hgt(x, z) + 0.06, z);
-    e.set(Math.PI / 2 + (RND() - 0.5) * 0.6, RND() * 6.28, (RND() - 0.5) * 0.6); q.setFromEuler(e);
+    p.set(x, hgt(x, z) + 0.03, z);
+    e.set(Math.PI / 2 + (RND() - 0.5) * 0.5, RND() * 6.28, (RND() - 0.5) * 0.5); q.setFromEuler(e);
+    const k = 0.85 + RND() * 0.3; sc.set(k, k, k);
     m4.compose(p, q, sc); im.setMatrixAt(i, m4);
   }
   im.receiveShadow = true; g.add(im);
@@ -4897,7 +4910,7 @@ const Input = (() => {
     get active() { return active; },
     idleFor() { return Clock.t - lastInputT; },
     touch() { lastInputT = Clock.t; },
-    reset() { active = null; },
+    reset() { const a = active; active = null; if (a && handlers.cancel) handlers.cancel(a.lever, a); },
   };
   return api;
 })();
@@ -4922,12 +4935,12 @@ const Hand = (() => {
       const p = from(); if (!p) { this.stop(); return; }
       const [px, py] = p;
       // timeline: 0-0.5 fade/move in, 0.5-0.75 press, 0.75-1.15 flick, 1.15-1.8 hold, fade out by 2.3
-      let x = px, y = py + 40, s = 1, o = 1, rot = -12 * dir;
-      if (t < 0.5) { const k = Ease.out(t / 0.5); y = py + 90 - 50 * k; o = k; }
-      else if (t < 0.75) { const k = (t - 0.5) / 0.25; y = py + 40 - 4 * k; s = 1 - 0.08 * k; if (k > 0.6) onPhase && onPhase('press'); }
-      else if (t < 1.15) { const k = Ease.out((t - 0.75) / 0.4); x = px + dir * 70 * k; y = py + 36; s = 0.92; rot = -12 * dir + 18 * dir * k; onPhase && onPhase('flick', k); }
-      else if (t < 1.8) { x = px + dir * 70; y = py + 36; s = 0.92 + 0.08 * ((t - 1.15) / 0.65); rot = 6 * dir; onPhase && onPhase('hold'); }
-      else if (t < 2.3) { const k = (t - 1.8) / 0.5; x = px + dir * 70; y = py + 36 + 20 * k; o = 1 - k; rot = 6 * dir; }
+      let x = px, y = py + 6, s = 1, o = 1, rot = -12 * dir;
+      if (t < 0.5) { const k = Ease.out(t / 0.5); y = py + 70 - 64 * k; o = k; }
+      else if (t < 0.75) { const k = (t - 0.5) / 0.25; y = py + 6 - 3 * k; s = 1 - 0.08 * k; if (k > 0.6) onPhase && onPhase('press'); }
+      else if (t < 1.15) { const k = Ease.out((t - 0.75) / 0.4); x = px + dir * 70 * k; y = py + 3; s = 0.92; rot = -12 * dir + 18 * dir * k; onPhase && onPhase('flick', k); }
+      else if (t < 1.8) { x = px + dir * 70; y = py + 3 + 20 * ((t - 1.15) / 0.65); s = 0.92 + 0.08 * ((t - 1.15) / 0.65); rot = 6 * dir; onPhase && onPhase('hold'); }
+      else if (t < 2.3) { const k = (t - 1.8) / 0.5; x = px + dir * 70; y = py + 23 + 20 * k; o = 1 - k; rot = 6 * dir; }
       else { this.stop(); return; }
       set(x, y, s, o, rot);
     },
@@ -5049,7 +5062,7 @@ function addRail(name, pts, opts = {}) {
 const tray = (() => {
   const pivot = new T.Group(); pivot.position.set(TRAY_C.x - 9.0, 0, TRAY_C.z); scene.add(pivot); // hinge on left edge
   const body = new T.Group(); body.position.set(9.0, 0, 0); pivot.add(body);
-  const plate = mesh(flatExtrude(rrShape(18.2, 12.6, 1.2), 0.42, 0.08, 8), MAT.shuFloor); body.add(plate);
+  const plate = mesh(flatExtrude(rrShape(18.2, 12.6, 1.2), 0.1, 0.03, 8), MAT.shuFloor); plate.position.y = -0.06; body.add(plate);
   const rim = rrShape(18.2, 12.6, 1.2); rim.holes.push(rrPath(17.4, 11.8, 0.9));
   const rimm = mesh(flatExtrude(rim, 0.7, 0.05, 8), MAT.shu); body.add(rimm);
   return { pivot, body };
@@ -5111,8 +5124,8 @@ for (const id of ['A', 'B', 'C']) {
     else if (s < def.w + def.d) { x = def.w / 2 - 0.2; z = def.d / 2 - (s - def.w); }
     else if (s < 2 * def.w + def.d) { x = def.w / 2 - (s - def.w - def.d); z = -def.d / 2 + 0.2; }
     else { x = -def.w / 2 + 0.2; z = -def.d / 2 + (s - 2 * def.w - def.d); }
-    const dm = mesh(new T.SphereGeometry(0.3 + RND() * 0.16, 12, 8), MAT.water, false, false);
-    dm.scale.y = 0.55; dm.position.set(x, BOX_HT + 0.12, z); dm.renderOrder = 4; g.add(dm); drops.push(dm);
+    const dm = mesh(new T.SphereGeometry(0.2 + RND() * 0.12, 12, 8), MAT.water, false, false);
+    dm.scale.y = 0.45; dm.position.set(x, BOX_HT + 0.12, z); dm.renderOrder = 4; g.add(dm); drops.push(dm);
     rimPath.push(V3(x, BOX_HT + 0.3, z));
   }
   world.containers[id] = {
@@ -5257,24 +5270,24 @@ const SL_OUT = [V3(-8.6, 3.85, -14.4), V3(-11.6, 3.85, -11.0), V3(-12.7, 3.82, -
 function railFromPts(name, pts, mode, opts = {}) { return addRail(name, pts, Object.assign({ mode, fold: true }, opts)); }
 railFromPts('srFeed', [V3(8.9, Y_LID, -4.05), ...SR_FEED, V3(7.6, Y_LID - 0.8, -13.5)], 'spread');
 railFromPts('slFeed', [V3(1.1, Y_LID, -9.25), ...SL_FEED, V3(-5.4, Y_LID - 0.8, -13.5)], 'spread');
-railFromPts('srOut', [V3(6.9, 3.8, -14.4), ...SR_OUT, V3(19.4, 3.78, 6.0)], 'spread');
-railFromPts('slOut', [V3(-6.9, 3.8, -14.4), ...SL_OUT, V3(-11.6, 3.78, 2.6)], 'spread');
+railFromPts('srOut', [V3(6.9, 3.8, -14.4), ...SR_OUT, V3(19.4, 3.78, 6.0)], 'spread', { postEvery: 10 });
+railFromPts('slOut', [V3(-6.9, 3.8, -14.4), ...SL_OUT, V3(-11.6, 3.78, 2.6)], 'spread', { postEvery: 10 });
 
 // ---- gathered-only fixed rails ----
 const L_EXIT = [V3(1.25, Y_LID - 0.12, 4.8), V3(3.0, Y_LID - 0.22, 5.7), V3(10.3, Y_LID - 0.42, 5.7), V3(11.3, Y_LID - 0.5, 4.4), V3(11.3, Y_LID - 0.75, -10.0), V3(9.4, Y_LID - 0.95, -13.3)];
 const R_EXIT = L_EXIT.map(p => V3(-p.x, p.y, p.z));
-railFromPts('lExit', [V3(1.1, Y_LID, 3.25), ...L_EXIT, V3(7.6, Y_LID - 1.0, -13.5)], 'gather', { skipPost: p => Math.abs(p.x - 9.9) < 1.6 || Math.abs(p.x - 2.6) < 1.4 });
-railFromPts('rExit', [V3(-1.1, Y_LID, 3.3), ...R_EXIT, V3(-7.6, Y_LID - 1.0, -13.5)], 'gather', { skipPost: p => Math.abs(p.x + 9.8) < 1.6 || Math.abs(p.x + 2.6) < 1.4 });
+railFromPts('lExit', [V3(1.1, Y_LID, 3.25), ...L_EXIT, V3(7.6, Y_LID - 1.0, -13.5)], 'gather', { postEvery: 12, skipPost: p => Math.abs(p.x - 9.9) < 1.6 || Math.abs(p.x - 2.6) < 1.4 || p.z > 2 && p.x < 6 });
+railFromPts('rExit', [V3(-1.1, Y_LID, 3.3), ...R_EXIT, V3(-7.6, Y_LID - 1.0, -13.5)], 'gather', { postEvery: 12, skipPost: p => Math.abs(p.x + 9.8) < 1.6 || Math.abs(p.x + 2.6) < 1.4 || p.z > 2 && p.x > -6 });
 railFromPts('jAB', [V3(-1.1, Y_LID, -9.3), V3(0, Y_LID, -9.7), V3(1.1, Y_LID, -9.25)], 'gather', { posts: false });
 railFromPts('jBC', [V3(8.9, Y_LID, -4.05), V3(9.4, Y_LID, -3.0), V3(8.9, Y_LID, -1.95)], 'gather', { posts: false });
 const BAG_ROAD = [V3(-8.9, 4.3, -14.6), V3(-10.6, 4.2, -13.4), V3(-11.4, 4.05, -10.8)];
-railFromPts('bagRoad', [V3(-6.9, 4.4, -14.2), ...BAG_ROAD], 'gather');
+railFromPts('bagRoad', [V3(-6.9, 4.4, -14.2), ...BAG_ROAD], 'gather', { postEvery: 10 });
 
 // ---- lower roads (下の道) : low rails on the cloth, both modes ----
 const LOW_RICE = [V3(-8.6, 2.9, -13.1), V3(-9.8, 1.6, -11.6), V3(-9.9, Y_CLOTH, -9.0), V3(-9.9, Y_CLOTH, 1.8), V3(-8.4, Y_CLOTH, 3.7), V3(-2.6, Y_CLOTH, 3.7)];
 const LOW_EGG = [V3(8.6, 2.9, -13.1), V3(9.8, 1.6, -11.6), V3(9.95, Y_CLOTH, -9.0), V3(9.95, Y_CLOTH, -2.0)];
-addRail('lowRice', [V3(-7.0, 3.6, -13.6), ...LOW_RICE], { mode: 'gather', fold: true, posts: false, half: 0.85 });
-addRail('lowEgg', [V3(7.0, 3.6, -13.6), ...LOW_EGG], { mode: 'gather', fold: true, posts: false });
+addRail('lowRice', [V3(-7.0, 3.6, -13.6), ...LOW_RICE], { mode: 'gather', fold: true, posts: false, r: 0.13, mat: MAT.woodDark });
+addRail('lowEgg', [V3(7.0, 3.6, -13.6), ...LOW_EGG], { mode: 'gather', fold: true, posts: false, r: 0.13, mat: MAT.woodDark });
 
 // ---- attached connectors (move with their container; fold when gathering) ----
 function attachedRail(c, name, worldPts) {
@@ -5482,7 +5495,7 @@ async function openLid(c) {
   Sound.boing();
   await claspTo(c, false, 0.1);
   for (const d of c.drops) { d.visible = true; d.scale.setScalar(0.01); }
-  await tween(0.55, e => { setLidAngle(c, e); for (const d of c.drops) d.scale.set(e, e * 0.55, e); }, Ease.outBack);
+  await tween(0.55, e => { setLidAngle(c, e); for (const d of c.drops) d.scale.set(e, e * 0.45, e); }, Ease.outBack);
   setLidAngle(c, 1);
   c.open = true; c.busy = false;
 }
@@ -5549,12 +5562,14 @@ async function liftUp(ball) {
     const slot = G.queue.length === 0 ? Q0 : Q1;
     G.queue.push(ball);
     const qpts = world.rails.queue.track.pts;
-    const pts = [];
-    for (const p of qpts) { pts.push(p); if (slot === Q1 && p.distanceTo(Q1) < 0.01) break; }
+    let pts = qpts.slice();
+    if (slot === Q1) { // stop at the second slot: cut the rail at the sample nearest to Q1
+      let bi = 0, bd = 1e9; qpts.forEach((p, i) => { const d = p.distanceTo(Q1); if (d < bd) { bd = d; bi = i; } });
+      pts = qpts.slice(0, Math.max(1, bi)); pts.push(Q1);
+    }
     await ball.roll(seg(pts), { vmin: 12, vmax: 30 });
-    ball.place(slot); ball.loc = 'queue';
-    Sound.knock(1.3, 0.4);
-    tween(0.6, e => { L.car.position.y = (y1 - BALL_R + 0.1) * (1 - e) + 0.5 * e; }, Ease.inOut);
+    if (G.queue.includes(ball)) { ball.place(slot); ball.loc = 'queue'; Sound.knock(1.3, 0.4); }
+    await tween(0.5, e => { L.car.position.y = (y1 - BALL_R + 0.1) * (1 - e) + 0.5 * e; }, Ease.inOut);
   } finally { L.busy = false; }
 }
 async function advanceQueue() {
@@ -5587,7 +5602,6 @@ function trySend(d) {
     }
   })();
   // the second ball rolls up to the gate
-  setTimeout(() => {}, 0);
   wait(0.5).then(() => { if (!G.busy || G.queue.length) advanceQueue(); });
   return true;
 }
@@ -5671,14 +5685,15 @@ async function retilt(ball, side) {
   const cupP = seesawCupWorld(side);
   await rollPts(ball, [cupP], { vmin: 12 });
   restIn(ball, side);
-  const lifted = S.occ[other]; S.occ[other] = null;
+  const lifted = S.occ[other];
   tiltTo(side);
   logEvent('retilt', { side, lifted: lifted && lifted.id });
-  await wait(0.35);
+  await wait(0.35);                       // the lifted ball rides up with its dish
+  S.occ[other] = null;
   if (lifted) {
     lifted.loc = 'moving';
     tipDish(other, -1);
-    const p = seesawCupWorld(other);
+    const p = lifted.pos.clone();
     await lifted.roll(seg([p, p.clone().add(V3(0, 0.3, -1.4)), V3(p.x * 1.05, 2.0, p.z - 2.6), V3(p.x, Y_CLOTH, -16.4)]), { v0: 12, vmin: 14 });
     Sound.knock(0.7, 0.5);
     goHome(lifted);
@@ -5741,6 +5756,7 @@ async function underLid(ball, side) {
   // clasp releases -> lid springs open -> crank tips the dish
   const opening = openLid(c);
   await wait(0.22);
+  let restingGo = null;
   if (resting) {
     S.occ[side] = null; resting.loc = 'moving';
     tipDish(side, 1);
@@ -5748,17 +5764,25 @@ async function underLid(ball, side) {
     logEvent('drop', { side, ball: resting.id });
     const p = seesawCupWorld(side);
     Sound.plop();
-    (async () => {
-      await resting.roll(seg([p, p.clone().add(V3(side === 'L' ? -1.2 : 1.2, -0.4, 0.4)), ...road]), { v0: 10, vmin: 16 });
-      goHome(resting);
+    // the resting ball drops onto the start of the lower road and waits there until the road ahead is clear
+    const landing = road[1].clone();
+    restingGo = (async () => {
+      await resting.roll(seg([p, p.clone().add(V3(side === 'L' ? -1.2 : 1.2, -0.4, 0.4)), road[0], landing]), { v0: 10, vmin: 14 });
+      resting.v = 0;
     })();
   }
   // first ball continues along the rest of the road and home
   const rest = roadTr.pts.slice(best + 1).filter((_, i) => i % 3 === 0);
   rest.push(roadTr.pts[roadTr.pts.length - 1]);
   await opening;
-  ball.roll(seg([ball.pos.clone(), ...rest]), { vmin: 16 }).then(() => goHome(ball));
-  await wait(0.6);
+  ball.roll(seg([ball.pos.clone(), ...rest]), { vmin: 16, vmax: 40 }).then(() => goHome(ball));
+  if (restingGo) {
+    await restingGo;
+    await wait(0.9);
+    const later = road.slice(2);
+    resting.roll(seg([resting.pos.clone(), ...later]), { vmin: 16, vmax: 34 }).then(() => goHome(resting));
+  }
+  await wait(0.3);
 }
 
 // ---------- gather (三枚閉じる -> 容器が中央へ) ----------
@@ -5777,11 +5801,11 @@ async function maybeGather() {
     rods.visible = true;
     await tween(1.15, e => {
       cPos(A).lerpVectors(a0, a1, e); cPos(C).lerpVectors(c0, c1, e);
-      const lift = Math.sin(e * Math.PI) * 0.6 + (e > 0.85 ? 0.42 * (e - 0.85) / 0.15 : 0);
+      const lift = Math.sin(e * Math.PI) * 0.6;
       cPos(A).y = lift; cPos(C).y = lift;
       updateRods();
     }, Ease.inOut);
-    cPos(A).y = 0.42; cPos(C).y = 0.42; cPos(world.containers.B).y = 0.42;
+    cPos(A).y = 0; cPos(C).y = 0;
     rods.visible = false;
     Sound.knock(0.6, 0.8);
     // swing chutes to the loop entries
@@ -5829,6 +5853,13 @@ function loopGlint() {
 async function finishRoad(ball) {
   G.mode = 'finishing';
   logEvent('finish');
+  try { await finishSequence(ball); }
+  catch (e) {                         // never leave the toy stuck: fall back to a fresh bento
+    console.warn(e);
+    try { await nextBento(new T.Group()); } catch (_) { G.mode = 'spread'; }
+  }
+}
+async function finishSequence(ball) {
   await rollPts(ball, BAG_ROAD, { vmin: 16 });
   // bell
   const bell = world.bag.bell;
@@ -5844,7 +5875,7 @@ async function finishRoad(ball) {
   while (G.queue.length === 0 && guard++ < 200) await wait(0.1);
   const other = G.queue.shift();
   if (other) {
-    while (other.moving) await wait(0.05);
+    let g2 = 0; while ((other.moving || other.loc !== 'queue') && g2++ < 200) await wait(0.05);
     other.loc = 'collected';
     const gp = world.lever.gatePivot;
     tween(0.12, e => { gp.rotation.x = -1.1 * e; }).then(() => wait(0.3)).then(() => tween(0.2, e => { gp.rotation.x = -1.1 * (1 - e); }));
@@ -5892,7 +5923,7 @@ async function nextBento(bento) {
   const cs = world.containers;
   for (const id of ['A', 'B', 'C']) { scene.attach(cs[id].group); cs[id].group.rotation.set(0, 0, 0); }
   scene.attach(world.outer.group);
-  scene.remove(bento);
+  bento.removeFromParent();
   const bagG = world.bag.group;
   bagG.position.x = -70;
   world.bag.bag.scale.set(1, 1, 1);
@@ -5901,10 +5932,10 @@ async function nextBento(bento) {
     const c = cs[id];
     setLidAngle(c, 1); c.open = true; c.busy = false;
     c.clasp.userData.hingePivot.rotation.x = 1.25;
-    for (const d of c.drops) { d.visible = true; d.scale.set(1, 0.55, 1); }
+    for (const d of c.drops) { d.visible = true; d.scale.set(1, 0.45, 1); }
   }
   setRailMode('spread');
-  for (const k in world.rails) { const r = world.rails[k]; if (r.mode === 'spread' || r.mode === 'both') { r.group.visible = false; r.group.scale.y = 0.02; } }
+  for (const k in world.rails) { const r = world.rails[k]; if (r.mode === 'spread') { r.group.visible = false; r.group.scale.y = 0.02; } }
   const entries = { A: V3(-14.5, 0, 40), B: V3(4.1, 0, -48), C: V3(48, 0, 8.6) };
   for (const id of ['A', 'B', 'C']) cs[id].group.position.copy(entries[id]);
   // outer lid back to its stand (rises from behind)
@@ -5924,7 +5955,7 @@ async function nextBento(bento) {
   Sound.knock(0.7, 0.6);
   for (const s of ['L', 'R']) { swing[s].group.visible = true; }
   aimSwing('L', stubAbove(cs.A, 1)); aimSwing('R', stubAbove(cs.C, 1));
-  await foldRails(r => r.mode === 'spread' || r.mode === 'both', true, 0.6);
+  await foldRails(r => r.mode === 'spread', true, 0.6);
   // seesaw level and empty
   world.seesaw.occ.L = null; world.seesaw.occ.R = null; tiltTo(null);
   // balls go from the collection tray back to the lift
@@ -5939,6 +5970,8 @@ async function nextBento(bento) {
 // ===================================================================
 const Hint = { demoShown: false, lastIdleStart: 0, glow: 0 };
 function hintUpdate(dt) {
+  // safety: a ball waiting in the second slot always rolls up to the gate
+  if (G.queue.length && !G.queue[0].moving && G.queue[0].pos.distanceTo(Q0) > 0.2 && (G.mode === 'spread' || G.mode === 'gathered')) advanceQueue();
   const ready = canSend();
   const lv = world.lever;
   if (ready && !Input.active && !Hand.playing) {
@@ -6027,7 +6060,8 @@ Input.on('other', (x, y) => {
   if (!hit) return;
   const root = hit.object.userData.wiggleRoot;
   if (G.mode === 'finishing') return;
-  wiggles.set(root, { t: 0, base: root.rotation.y });
+  const prev = wiggles.get(root);
+  wiggles.set(root, { t: 0, base: prev ? prev.base : root.rotation.y });
   Sound.tiny();
 });
 function wiggleUpdate(dt) {
@@ -6106,8 +6140,12 @@ let resizeT = 0;
 function onResize() { frameCamera(); }
 window.addEventListener('resize', () => { clearTimeout(resizeT); onResize(); resizeT = setTimeout(onResize, 120); });
 window.addEventListener('orientationchange', () => setTimeout(onResize, 200));
-renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); stop(); }, false);
-renderer.domElement.addEventListener('webglcontextrestored', () => start(), false);
+renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); stop(); Sound.silenceRollers(); }, false);
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  // render-target contents are lost with the context: rebuild the reflection map
+  try { ENV = pmrem.fromScene(new T.RoomEnvironment(), 0.04).texture; for (const m of ENV_MATS) { m.envMap = ENV; m.needsUpdate = true; } } catch (_) {}
+  frameCamera(); start();
+}, false);
 
 frameCamera();
 renderer.compile(scene, camera);
@@ -6130,6 +6168,13 @@ window.__game = {
   input: () => ({ active: !!Input.active, lastPress: Input.lastPress, idle: Input.idleFor() }),
   hand: () => ({ playing: Hand.playing, opacity: +document.getElementById('hand').style.opacity || 0 }),
   running: () => running,
+  fitCheck() {
+    const w = innerWidth, h = innerHeight, ins = safeInsets();
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const p of FIT_PTS) { const [x, y] = screenOf(p); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const k = screenOf(knobWorld());
+    return { w, h, ins, box: [x0, y0, x1, y1].map(v => Math.round(v)), inside: x0 >= ins.l - 1 && x1 <= w - ins.r + 1 && y0 >= ins.t - 1 && y1 <= h - ins.b + 1, knob: k.map(Math.round), knobR: Math.round(leverHitRadius()) };
+  },
   leverRadius: leverHitRadius,
 };
 
