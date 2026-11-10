@@ -620,7 +620,7 @@ uniform vec4 uMat;uniform vec3 uEmisC;uniform float uAlpha;uniform float uFres;
 uniform vec4 uH0;uniform vec4 uH1;
 uniform vec3 uLP;uniform vec3 uLD;uniform vec3 uLC;uniform vec2 uLCone;
 uniform vec3 uCam;uniform vec3 uSky;uniform vec3 uGnd;uniform vec3 uFD;uniform vec3 uFC;
-uniform float uShOn;uniform vec2 uShT;uniform vec2 uRes;
+uniform float uShOn;uniform vec2 uShT;uniform vec2 uRes;uniform float uTrans;
 varying vec3 vW;varying vec3 vN;varying vec2 vU;varying vec4 vL;
 float unpack(vec4 c){return dot(c,vec4(1.0,1.0/255.0,1.0/65025.0,1.0/16581375.0));}
 float shadowAt(vec3 N,vec3 L){
@@ -652,7 +652,8 @@ void main(){
   vec3 V=normalize(uCam-vW);vec3 H=normalize(L+V);
   float sp=pow(max(dot(N,H),0.0),shin)*spec*(shin+8.0)/28.0;
   vec3 hemi=mix(uGnd,uSky,N.y*0.5+0.5);
-  vec3 col=base*(hemi+uFC*max(dot(N,uFD),0.0)+uLC*(ndl*att*sh))+mix(vec3(1.0),base*4.0,metal)*uLC*sp*att*sh;
+  float tr=uTrans*max(dot(-N,L),0.0)*att;
+  vec3 col=base*(hemi+uFC*max(dot(N,uFD),0.0)+uLC*(ndl*att*sh+tr))+mix(vec3(1.0),base*4.0,metal)*uLC*sp*att*sh;
   col+=uEmisC*uMat.w;
   float a=uAlpha;if(uFres>0.0){float f=1.0-max(dot(N,V),0.0);a=mix(uAlpha,1.0,f*f*uFres);}
   col=(col*(2.51*col+0.03))/(col*(2.43*col+0.59)+0.14);
@@ -764,7 +765,7 @@ function draw(m,M,mt){
   if(mt.tex){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,mt.tex);gl.uniform1f(u.uTexOn,1);gl.uniform2fv(u.uUvS,mt.uvS);}else gl.uniform1f(u.uTexOn,0);
   gl.uniform1f(u.uInkMode,mt.inkMode);
   if(mt.inkMode){gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,mt.ink||TX.white);gl.uniform3fv(u.uInkA,mt.inkA);gl.uniform3fv(u.uInkB,mt.inkB);gl.uniform1f(u.uInkAmt,mt.inkAmt);}
-  gl.uniform4f(u.uMat,mt.spec,mt.shin,mt.metal,mt.emis);gl.uniform3fv(u.uEmisC,mt.emisC);gl.uniform1f(u.uAlpha,mt.alpha);gl.uniform1f(u.uFres,mt.fres);
+  gl.uniform4f(u.uMat,mt.spec,mt.shin,mt.metal,mt.emis);gl.uniform1f(u.uTrans,mt.trans||0);gl.uniform3fv(u.uEmisC,mt.emisC);gl.uniform1f(u.uAlpha,mt.alpha);gl.uniform1f(u.uFres,mt.fres);
   if(mt.holes){gl.uniform4fv(u.uH0,HOLEU[0]);gl.uniform4fv(u.uH1,HOLEU[1]);}else{gl.uniform4fv(u.uH0,HOLE_OFF);gl.uniform4fv(u.uH1,HOLE_OFF);}
   if(mt.def){gl.uniform1f(u.uDefOn,1);gl.uniform4fv(u.uDef1,mt.def[0]);gl.uniform4fv(u.uDef2,mt.def[1]);}else gl.uniform1f(u.uDefOn,0);
   if(mt.cull)gl.enable(gl.CULL_FACE);else gl.disable(gl.CULL_FACE);
@@ -956,7 +957,7 @@ function stampDrag(s,station){
   const w=L.markH*0.62*(0.22+0.78*Math.abs(Math.cos(s.bandS*3.0+s.bandPh)));
   const ink=INK[s.type],col=(ink.a===ink.b||Math.sin(s.bandS*5)>0)?ink.a:ink.b;
   const alpha=clamp(s.ink,0.12,1)*0.85;
-  paintStack(stack,brushImg(col),C,bandUp,w,Math.max(step*1.8,0.05),alpha,st.phi);
+  paintStack(stack,brushImg(col),C,bandUp,w,Math.max(step*3.2,0.07),alpha*0.62,st.phi);
   s.ink=Math.max(0.14,s.ink-step*0.05);
   st.bandSnd=1;
 }
@@ -1120,8 +1121,8 @@ function buildMats(){
     stripe:MAT({tex:TX.stripe,uvS:[1,4],spec:0.05,shin:8}),
     farP:MAT({tex:TX.paper,uvS:[1.2,1.2],ink:SF.far.tex,inkMode:1,spec:0.08,shin:12,cast:false}),
     nearP:MAT({tex:TX.paper,uvS:[1.2,1.2],ink:SF.near.tex,inkMode:1,spec:0.08,shin:12,cast:false}),
-    topF:MAT({tex:TX.paper,uvS:[1,1],ink:SF.topF.tex,inkMode:1,spec:0.08,shin:12,holes:true,cull:true}),
-    topB:MAT({tex:TX.paper,uvS:[1,1],ink:SF.topB.tex,inkMode:1,spec:0.08,shin:12,holes:true,cull:true}),
+    topF:MAT({tex:TX.paper,uvS:[1,1],ink:SF.topF.tex,inkMode:1,spec:0.08,shin:12,holes:true,cull:true,trans:0.55}),
+    topB:MAT({tex:TX.paper,uvS:[1,1],ink:SF.topB.tex,inkMode:1,spec:0.08,shin:12,holes:true,cull:true,trans:0.55}),
     shade:MAT({col:C_GREEN,spec:0.35,shin:70,metal:0.2}),
     shadeIn:MAT({col:[0.9,0.85,0.7],emis:1.6,emisC:[1.0,0.86,0.62],spec:0,cull:true,cast:false}),
     bulb:MAT({col:[1,1,1],emis:3.2,emisC:[1,0.9,0.7],cast:false}),
@@ -1360,7 +1361,7 @@ function drawSprites(){
   const g=st.guide;
   if(g&&g.t){const p=g.t==='ring'?handleWorld():g.t==='paper'?pknobWorld():bknobWorld();
     const pulse=0.5+0.5*Math.sin(st.t*TAU/1.7);batches[1].push([[p[0],p[1]+0.25,p[2]],0.95+pulse*0.25,[1,0.85,0.55],0.22+0.2*pulse+st.call*0.3]);}
-  if(st.glowStand>0&&!st.fly){const c=flapPaperCenter();batches[1].push([c,3.4,[1,0.92,0.75],0.18*st.glowStand]);}
+  if(st.glowStand>0&&!st.fly){const c0=flapPaperCenter(),tc=V3.norm(V3.sub(CAM.eye,c0)),c=V3.add(c0,V3.sc(tc,3.2));batches[1].push([c,3.0,[1,0.92,0.75],0.16*st.glowStand]);}
   gl.useProgram(PR.spr.p);gl.uniformMatrix4fv(PR.spr.u.uVP,false,CAM.vp);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,TX.spr);gl.uniform1i(PR.spr.u.uTex,0);
   gl.disable(gl.CULL_FACE);
   for(let b=0;b<2;b++){const L2=batches[b];if(!L2.length)continue;let n=0;
@@ -1483,11 +1484,11 @@ function release(e,cancel){
   }else if(G.kind==='paper'){
     if(tap)st.pnudge+=14;else if(!cancel&&fresh)st.phiV=clamp(G.v*0.8,-360,360);
   }else if(G.kind==='book'){
-    if(tap&&st.unlocked)st.bnudge+=24;settleBook();
+    if(tap&&st.unlocked){st.bSettle=st.beta<40?80:st.beta<130?180:80;}else settleBook();
   }
   G.id=null;G.kind=null;G.obj=null;G.last=null;
 }
-function settleBook(){const b=st.beta+st.pendBook*0.55;if(b>55&&b<118)st.bSettle=80;else if(b<10)st.bSettle=0;else if(b>168)st.bSettle=180;else st.bSettle=null;}
+function settleBook(){const b=st.beta+st.pendBook*0.55;st.bSettle=b<30?0:b<132?80:180;}
 function detentNear(th){
   for(const s of st.seats){if(!s.emerged||s.ext<1)continue;const r=wrap(th+s.off-L.aP);if(Math.abs(r)<7)return th-r;if(st.beta>=172&&Math.abs(r-44)<7)return th-(r-44);}
   if(st.tr.emerged&&st.tr.ext>=1){const r=wrap(th+L.trOff-L.aP);if(Math.abs(r)<7)return th-r;if(Math.abs(r-44)<7)return th-(r-44);}
@@ -1511,7 +1512,7 @@ function guideTarget(){
   const f=st.f,c=st.cyc;
   if(!f.first)return {t:'ring',k:'r0'};
   const held=st.seats.some(s=>s.emerged&&s.band<=0.45&&(s.inP&&st.beta<6||s.inQ&&st.beta>=172))&&G.kind!=='ring';
-  if(held&&!f.d2)return {t:'paper',k:'pb'};
+  if(held&&!f.d2&&!st.unlocked)return {t:'paper',k:'pb'};
   if(st.prints>=3&&f.userTurn<20)return {t:'paper',k:'p0'};
   if(!st.unlocked)return {t:'ring',k:'r1'};
   if(!c.trans)return {t:'ring',k:'r2'};
@@ -1538,7 +1539,8 @@ function guideUpdate(dt){
 let ovDirty=false;
 function clearOverlay(){ox.setTransform(1,0,0,1,0,0);ox.clearRect(0,0,ov.width,ov.height);ovDirty=false;}
 function drawHand(x,y,sc,press,alpha){
-  const c=ox;c.save();c.translate(x,y);c.scale(sc,sc);c.rotate(-0.5);c.globalAlpha=alpha;
+  const flip=(x+100*sc>LAY.W)?-1:1;
+  const c=ox;c.save();c.translate(x,y);c.scale(sc*flip,sc);c.rotate(-0.5);c.globalAlpha=alpha;
   c.fillStyle='rgba(0,0,0,0.22)';c.beginPath();c.ellipse(10,16,34,16,0,0,TAU);c.fill();
   const sk=c.createLinearGradient(-20,0,40,90);sk.addColorStop(0,'#f6d2ae');sk.addColorStop(1,'#d9a47c');
   c.fillStyle=sk;c.strokeStyle='rgba(120,70,40,0.45)';c.lineWidth=1.6;
