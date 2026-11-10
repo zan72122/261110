@@ -258,12 +258,14 @@ void main(){
  dough*=1.0-bub*0.16*(1.0-bake*0.4);
  dough=mix(dough,dough*vec3(1.05,0.98,0.9),flap*0.15);
  vec3 chC=mix(vec3(0.98,0.90,0.66),vec3(0.98,0.80,0.44),bake*0.7);
- float bn=noise(p*21.0+7.0)*0.65+noise(p*47.0+1.0)*0.35;
+ vec2 pr=vec2(p.x*0.8-p.y*0.6,p.x*0.6+p.y*0.8);vec2 pr2=vec2(pr.x*0.5-pr.y*0.87,pr.x*0.87+pr.y*0.5);
+ float bn=noise(pr*21.0+7.0)*0.65+noise(pr2*47.0+1.0)*0.35;
  float chBl=smoothstep(0.62,0.80,bn)*bake*smoothstep(0.35,0.9,ch);
  chC=mix(chC,vec3(0.80,0.52,0.20),chBl*0.55);
  chC=mix(chC,vec3(0.62,0.33,0.10),smoothstep(0.78,0.9,bn)*bake*0.5);
  chC=mix(vec3(1.0,0.84,0.46),chC,smoothstep(0.15,0.75,chM));
- float cb=noise(p*26.0+1.3);n=normalize(n+vec3(noise(p*26.0+vec2(0.6,1.3))-cb,0.0,noise(p*26.0+vec2(1.3,0.6))-cb)*chM*1.4);
+ chC=mix(chC,vec3(0.55,0.30,0.10),clamp(toast*0.75,0.0,0.75));
+ float cb=noise(pr2*26.0+1.3);n=normalize(n+vec3(noise(pr2*26.0+vec2(0.6,1.3))-cb,0.0,noise(pr2*26.0+vec2(1.3,0.6))-cb)*chM*1.4);
  vec3 base=mix(dough,chC,chM);
  float rough=mix(mix(0.80,0.52,bk),0.2,chM);
  rough=mix(rough,0.38,crisp*0.5);
@@ -299,7 +301,7 @@ void main(){
  vec3 n=normalize(vN);vec3 v=normalize(uCam-vW);if(dot(n,v)<0.0)n=-n;
  float ndv=max(dot(n,v),0.0);
  float F=0.04+0.96*pow(1.0-ndv,5.0);
- float smudge=fbm(vT*vec2(7.0,5.0)+3.0);
+ float smudge=noise(vT*vec2(7.0,5.0)+3.0)*0.62+noise(vT*vec2(23.0,17.0)+1.0)*0.38;
  float streak=smoothstep(0.35,0.0,abs(fract(vT.x*1.3-vT.y*0.9+0.2)-0.5))*0.5;
  vec3 r=reflect(-v,n);
  vec3 refl=envMap(r,0.03+smudge*0.12);
@@ -820,7 +822,7 @@ const P={n:0,cnt:0,free:[],
   glow:new Float32Array(MAXP),crack:new Float32Array(MAXP),seam:new Float32Array(MAXP),sag:new Float32Array(MAXP),
   dent:new Float32Array(MAXP),bend:new Float32Array(MAXP),bendX:new Float32Array(MAXP),bendZ:new Float32Array(MAXP),
   kind:new Uint8Array(MAXP), // band class at bake: 0 none 1 ear 2 wing
-  inD:new Uint8Array(MAXP),spring:new Float32Array(MAXP),dg:new Float32Array(MAXP)
+  inD:new Uint8Array(MAXP),eat:new Uint8Array(MAXP),spring:new Float32Array(MAXP),dg:new Float32Array(MAXP)
 };
 const TR={n:0,cnt:0,free:[],alive:new Uint8Array(MAXT),a:new Int32Array(MAXT),b:new Int32Array(MAXT),c:new Int32Array(MAXT),vol:new Float32Array(MAXT),ar:new Float32Array(MAXT)};
 const ED={n:0,cnt:0,free:[],alive:new Uint8Array(MAXE),a:new Int32Array(MAXE),b:new Int32Array(MAXE),rest:new Float32Array(MAXE),
@@ -839,7 +841,7 @@ function addP(x,z,mu,mv){
   P.alive[i]=1;P.cnt++;P.x[i]=P.px[i]=P.fx[i]=P.ex[i]=x;P.z[i]=P.pz[i]=P.fz[i]=P.ez[i]=z;P.mu[i]=mu;P.mv[i]=mv;
   P.vol[i]=0;P.area[i]=0;P.thick[i]=T_IN;P.hR[i]=T_IN;P.bake[i]=1;P.bakeR[i]=0;P.toast[i]=0;P.lift[i]=0;P.liftV[i]=0;P.liftT[i]=0;
   P.layer[i]=0;P.layerT[i]=0;P.air[i]=0;P.soft[i]=0;P.edited[i]=0;P.wasBaked[i]=0;P.welds[i]=0;P.bnd[i]=0;P.piece[i]=0;
-  P.glow[i]=0;P.crack[i]=0;P.seam[i]=0;P.sag[i]=0;P.dent[i]=0;P.w[i]=0;P.spring[i]=0;P.inD[i]=0;P.bend[i]=0;P.bendX[i]=0;P.bendZ[i]=0;P.kind[i]=0;
+  P.glow[i]=0;P.crack[i]=0;P.seam[i]=0;P.sag[i]=0;P.dent[i]=0;P.w[i]=0;P.spring[i]=0;P.inD[i]=0;P.eat[i]=0;P.bend[i]=0;P.bendX[i]=0;P.bendZ[i]=0;P.kind[i]=0;
   return i;
 }
 function killP(i){if(!P.alive[i])return;P.alive[i]=0;P.cnt--;P.free.push(i);}
@@ -942,7 +944,7 @@ function computeDerived(){
   for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;if(ED.t1[e]<0){P.bnd[ED.a[e]]=1;P.bnd[ED.b[e]]=1;}}
   for(let i=0;i<n;i++){if(!P.alive[i])continue;
     const ar=Math.max(P.area[i],S0*S0*0.08);let th=P.vol[i]/ar;if(!(th>0))th=T_IN;th=Math.min(th,T_RIM*2.6);P.thick[i]=th;
-    const pf=sstep(0.0185,0.034,th);P.hR[i]=th*(1+PUFF*P.bake[i]*pf);}
+    const pf=sstep(0.0185,0.034,th);P.hR[i]=th*(1+PUFF*P.bake[i]*pf)*(P.kind[i]===1?1+0.75*P.bake[i]:1);}
 }
 function puffOf(i){return sstep(0.0185,0.034,P.thick[i])*P.bake[i];}
 function crispOf(i){return P.bake[i]*(1-sstep(0.010,0.020,P.thick[i]));}
@@ -1046,7 +1048,7 @@ function ovenBegin(gx,gz,tolW){
   const a=nearestP(gx,gz,tolW,true);if(a<0)return false;
   DRAG.anchor=a;DRAG.mode='oven';DRAG.list=[];DRAG.G0=[gx,gz];DRAG.G=[gx,gz];DRAG.Gp=[gx,gz];DRAG.D=[0,0];DRAG.maxD=0;
   DRAG.press=1;DRAG.pressX=P.x[a];DRAG.pressZ=P.z[a];DRAG.rewound=0;DRAG.rewEdited=0;DRAG.trans=0;
-  DRAG.fromBoundary=Math.hypot(P.x[a]-gx,P.z[a]-gz)>0.02;DRAG.seamBroken=false;
+  DRAG.fromBoundary=Math.hypot(P.x[a]-gx,P.z[a]-gz)>0.02;DRAG.seamBroken=false;DRAG.openedSeam=false;DRAG.fingerMax=0;
   for(let i=0;i<P.n;i++){P.inD[i]=0;if(!P.alive[i])continue;P.ex[i]=P.x[i];P.ez[i]=P.z[i];P.w[i]=0;}
   const rb=0.12;const ax=P.x[a],az=P.z[a];
   const anchorEar=isHardEar(a);
@@ -1059,12 +1061,12 @@ function ovenBegin(gx,gz,tolW){
       if(!anchorEar&&isHardEar(j)&&Math.hypot(P.x[j]-ax,P.z[j]-az)>0.035)continue;
       if(Math.hypot(P.x[j]-ax,P.z[j]-az)<rb)q.push(j);}}
   P.w[a]=1;
-  DRAG.ringAtStart=RING.has;
+  DRAG.ringAtStart=RING.has;DRAG.slide0=CH.slide;
   if(RING.has&&RING.cells&&RING.cells.length){
     const C=RING.cells;let dA=1e9;for(let k=0;k<C.length;k+=2)dA=Math.min(dA,Math.hypot(C[k]-ax,C[k+1]-az));
-    if(dA<0.16){ // anchor belongs to the loop: the whole loop follows elastically
+    if(dA<0.25){ // anchor belongs to the loop: the whole loop follows elastically
       for(let i=0;i<P.n;i++){if(!P.alive[i]||P.inD[i])continue;let dm=1e9;for(let k=0;k<C.length;k+=2){const d=Math.abs(C[k]-P.x[i])+Math.abs(C[k+1]-P.z[i]);if(d<dm)dm=d;}
-        if(dm<0.075){const dd=Math.hypot(P.x[i]-ax,P.z[i]-az);P.w[i]=0.6*Math.exp(-dd/0.32);P.gx[i]=P.x[i];P.gz[i]=P.z[i];softP(i);DRAG.list.push(i);}}
+        if(dm<0.09){const dd=Math.hypot(P.x[i]-ax,P.z[i]-az);P.w[i]=0.8*Math.exp(-dd/0.6);P.gx[i]=P.x[i];P.gz[i]=P.z[i];softP(i);DRAG.list.push(i);}}
       DRAG.loop=true;}else DRAG.loop=false;
   }
   DRAG.startCheese=CH.n?Array.from({length:CH.n},(_,k)=>[CH.x[k],CH.z[k]]):[];
@@ -1088,18 +1090,19 @@ function ovenDragUpdate(dt){
   // pulling a seam opens it
   if(!DRAG.seamBroken&&dm>0.025){DRAG.seamBroken=true;
     for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1)continue;const a=ED.a[e],b=ED.b[e];
-      if((P.inD[a]&&P.w[a]>0.05)||(P.inD[b]&&P.w[b]>0.05)){const wk=ED.wk[e];const x=(P.x[a]+P.x[b])/2,z=(P.z[a]+P.z[b])/2;killEdge(e);emit('unweld',{wk,x,z});
+      if((P.inD[a]&&P.w[a]>0.05)||(P.inD[b]&&P.w[b]>0.05)){const wk=ED.wk[e];const x=(P.x[a]+P.x[b])/2,z=(P.z[a]+P.z[b])/2;killEdge(e);emit('unweld',{wk,x,z});if(wk===1){DRAG.openedSeam=true;POCKET.opened=true;}
         if(wk===1&&POCKET.air>0.3)POCKET.vent=TIME.t+1.6;}}}
   // moved -> soft
   for(let i=0;i<P.n;i++){if(!P.alive[i]||P.inD[i])continue;
     if(Math.abs(P.x[i]-P.ex[i])+Math.abs(P.z[i]-P.ez[i])>(isHardEar(i)?0.06:0.013)){softP(i);P.w[i]=0;P.gx[i]=P.x[i];P.gz[i]=P.z[i];DRAG.list.push(i);}}
   // rewind
   let rew=0,rewE=0;
-  for(const i of DRAG.list){if(!P.alive[i])continue;if(P.toast[i]>0)P.toast[i]=Math.max(0,P.toast[i]-dt*3.2);if(P.bake[i]>0){const d=Math.min(P.bake[i],dt*3.2);P.bake[i]-=d;rew+=d;if(P.edited[i]&&P.wasBaked[i])rewE+=d;}}
+  const rwOK=dm>0.012||TIME.t-DRAG.t0>0.18;
+  if(rwOK)for(const i of DRAG.list){if(!P.alive[i])continue;if(P.toast[i]>0)P.toast[i]=Math.max(0,P.toast[i]-dt*3.2);if(P.bake[i]>0){const d=Math.min(P.bake[i],dt*3.2);P.bake[i]-=d;rew+=d;if(P.edited[i]&&P.wasBaked[i])rewE+=d;}}
   DRAG.rewound+=rew;DRAG.rewEdited+=rewE;
   DIAL.vel-=rew*0.9;
   if(rew>0)SND.rewind(Math.min(1,rew*0.7));
-  if(DRAG.rewEdited>1.5&&!(G.rdone&&G.rdone.d2===1)){
+  if(DRAG.rewEdited>1.5&&P.edited[DRAG.anchor]&&!(G.rdone&&G.rdone.d2===1)){
     let bakedOther=0;for(let i=0;i<P.n;i++)if(P.alive[i]&&!P.soft[i]&&P.bake[i]>0.9)bakedOther++;
     if(bakedOther>P.cnt*0.4)achieve('d2','rewind edited band');
   }
@@ -1108,21 +1111,20 @@ function ovenDragUpdate(dt){
   const f=hardEarNear(P.x[DRAG.anchor]||DRAG.G0[0],P.z[DRAG.anchor]||DRAG.G0[1],0.30);
   DRAG.fulcrum=f;
   let tau=0;
-  if(f&&dm>0.02){tau=clamp((dm-0.02)*0.42,0,0.075);}
+  if(f&&dm>0.02){tau=clamp((dm-0.02)*0.5,0,0.09);}
   DRAG.tilt=lerp(DRAG.tilt,tau,clamp(dt*10,0,1));
   for(let i=0;i<P.n;i++){if(!P.alive[i])continue;let lt=0;
     if(f&&DRAG.tilt>0.002){const ux=DRAG.G[0]-f.x,uz=DRAG.G[1]-f.z;const ul=Math.hypot(ux,uz)||1;
       const rx=P.x[i]-f.x,rz=P.z[i]-f.z;const s=(rx*ux+rz*uz)/ul;const r2=rx*rx+rz*rz;
-      const fall=Math.exp(-r2/(0.36*0.36));lt=DRAG.tilt*(0.5-0.5*clamp(s/0.26,-1,1))*fall*1.6;}
+      const fall=Math.exp(-r2/(0.75*0.75));lt=DRAG.tilt*clamp(-s/0.42+0.15,0,1)*fall*1.8;}
     P.liftT[i]=lt;}
-  if(f&&DRAG.tilt>0.02&&!(G.rdone&&G.rdone.d3===1)){
-    let mv=0;for(let k=0;k<CH.n&&k<DRAG.startCheese.length;k++){mv+=Math.hypot(CH.x[k]-DRAG.startCheese[k][0],CH.z[k]-DRAG.startCheese[k][1])*CH.a[k];}
-    if(mv>0.06)achieve('d3','tilt on ear, cheese slid '+mv.toFixed(3));
+  if(f&&DRAG.tilt>0.02&&!(G.rdone&&G.rdone.d3===1)&&!P.edited[DRAG.anchor]){
+    if(CH.slide-DRAG.slide0>0.25)achieve('d3','tilt on ear, cheese slid '+(CH.slide-DRAG.slide0).toFixed(3));
   }
   // ring transmission
   if(DRAG.ringAtStart&&RING.has){let mx=0;const ax=P.ex[DRAG.anchor],az=P.ez[DRAG.anchor];
     for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(Math.hypot(P.ex[i]-ax,P.ez[i]-az)<0.24)continue;mx=Math.max(mx,Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i]));}
-    DRAG.trans=mx;if(mx>0.03&&G.rdone&&G.rdone.d5a&&G.rdone.d5!==1){achieve('d5','ring transmits '+mx.toFixed(3));emit('ringPull',{});}}
+    DRAG.trans=mx;if(mx>0.045&&G.rdone&&G.rdone.d5a&&G.rdone.d5!==1){achieve('d5','ring transmits '+mx.toFixed(3));emit('ringPull',{});}}
   // plate proximity
   const pl=LAY.plate;const tipx=P.x[DRAG.anchor],tipz=P.z[DRAG.anchor];
   const over=Math.hypot(DRAG.G[0]-pl.x,DRAG.G[1]-pl.z)<pl.r*0.95&&Math.hypot(tipx-pl.x,tipz-pl.z)<pl.r*1.02;
@@ -1211,11 +1213,12 @@ function weldLayerPass(dt){
       if(j===i||!P.alive[j])return;
       const d=Math.hypot(P.x[i]-P.x[j],P.z[i]-P.z[j]);if(d>r)return;
       if(Math.hypot(P.mu[i]-P.mu[j],P.mv[i]-P.mv[j])<md0)return;
-      if(DRAG.active&&P.w[i]>0.03&&P.layer[i]===0&&P.layer[j]===0&&P.w[j]<P.w[i]*0.5){P.layer[i]=1;P.layerT[i]=0;}
+      if(DRAG.active&&P.w[i]>0.03&&P.layer[i]===0&&P.layer[j]===0&&P.w[j]<P.w[i]*0.5&&!P.bnd[j]){P.layer[i]=1;P.layerT[i]=0;}
     });
   }
 }
 
+function countJoins(){let c=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&ED.type[e]===1&&ED.wk[e]===2)c++;return c;}
 function makeWelds(list){
   buildHash();
   const r=0.66*S0,md0=2.4*S0;let made=0;const madeAt=[];
@@ -1239,19 +1242,20 @@ function makeWelds(list){
     const j=best;
     if(bd>0.62*S0){const k=(bd-0.55*S0)/bd*0.5;const dx=P.x[j]-P.x[i],dz=P.z[j]-P.z[i];P.x[i]+=dx*k;P.z[i]+=dz*k;P.px[i]=P.x[i];P.pz[i]=P.z[i];if(P.bake[j]<0.5){P.x[j]-=dx*k*0.5;P.z[j]-=dz*k*0.5;}bd=Math.hypot(P.x[j]-P.x[i],P.z[j]-P.z[i]);}
     const e=addEdge(i,j,1,-1);if(e<0)continue;
-    ED.rest[e]=Math.max(bd,0.5*S0);ED.wk[e]=(P.layer[i]!==P.layer[j])?1:2;P.welds[i]++;P.welds[j]++;made++;
-    const cx=(P.x[i]+P.x[j])/2,cz=(P.z[i]+P.z[j])/2;madeAt.push([P.x[i],P.z[i]]);
+    ED.rest[e]=Math.max(bd,0.5*S0);ED.wk[e]=(P.layer[i]!==P.layer[j]&&!(P.bnd[i]&&P.bnd[j]))?1:2;if(ED.wk[e]===1&&TIME.t>POCKET.vent)POCKET.opened=false;P.welds[i]++;P.welds[j]++;made++;
+    const cx=(P.x[i]+P.x[j])/2,cz=(P.z[i]+P.z[j])/2;madeAt.push([P.x[i],P.z[i]]);P.glow[i]=1.6;P.glow[j]=1.6;GF.forceFrames=Math.max(GF.forceFrames||0,30);
     if(made<=3||made%3===0)emit('weld',{wk:ED.wk[e],x:cx,z:cz});
-    if(ED.wk[e]===2)RING.checkAt=TIME.t+0.35;
+    RING.checkAt=TIME.t+0.35;
     if(made>=16)break;
   }
   return made;
 }
 /* ---- bake management ---- */
 function releaseOven(serve){
+  if(DRAG.openedSeam)POCKET.vent=Math.max(POCKET.vent,TIME.t+2.5);
   const band={list:[],t:TIME.t,cx:0,cz:0,moved:0,thick:0,rewE:DRAG.rewEdited,done:false};
   let sx=0,sz=0,c=0,mt=0,mc=0;
-  const tap=DRAG.maxD<0.035;
+  const tap=(DRAG.fingerMax||0)<pxToWorld(10);
   for(const i of DRAG.list){if(!P.alive[i]||!P.soft[i])continue;band.list.push(i);sx+=P.x[i];sz+=P.z[i];c++;
     const mvd=Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i]);if(mvd>0.03){mt+=P.thick[i];mc++;}
     P.bakeR[i]=Math.max(0.8,1/(0.5+16*P.thick[i]))*(serve?3:1);P.edited[i]=1;
@@ -1261,7 +1265,12 @@ function releaseOven(serve){
   // spring back bounce
   for(const i of band.list){P.liftV[i]+=0.35*(1-P.bake[i]);}
   BANDS.push(band);
+  const joinsBefore=countJoins();
   makeWelds(band.list);
+  if(countJoins()>joinsBefore){ // a join: keep the loop shape (no spring-back)
+    for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e])continue;const a=ED.a[e],b=ED.b[e];if(P.inD[a]||P.inD[b])ED.rest[e]=Math.hypot(P.x[b]-P.x[a],P.z[b]-P.z[a]);}
+    for(const i of band.list){P.px[i]=P.x[i];P.pz[i]=P.z[i];}
+  }
   for(const i of band.list)P.w[i]=0;
   for(let i=0;i<P.n;i++)P.liftT[i]=0;
   DRAG.tilt=0;
@@ -1281,7 +1290,7 @@ function bakeUpdate(dt){
 }
 function classifyBand(b){
   let kind=0;
-  if(b.moved>=3){if(b.thick>0.0262)kind=1;else if(b.thick<0.0175)kind=2;}
+  if(b.moved>=3){kind=b.thick>0.0225?1:2;}
   b.kind=kind;
   if(kind){for(const i of b.list){if(!P.alive[i])continue;if(Math.hypot(P.x[i]-P.ex[i],P.z[i]-P.ez[i])>0.02)P.kind[i]=kind;}}
   // d1: ear & wing coexist
@@ -1291,14 +1300,14 @@ function classifyBand(b){
 }
 
 /* ---- pocket (袋) ---- */
-const POCKET={has:false,air:0,maxAir:0,sealed:false,cx:0,cz:0,cnt:0,inflated:false,checkT:0,vent:0};
+const POCKET={has:false,air:0,maxAir:0,sealed:false,cx:0,cz:0,cnt:0,inflated:false,checkT:0,vent:0,opened:false};
 function pocketUpdate(dt){
   let c=0,sx=0,sz=0;
   for(let i=0;i<P.n;i++){if(!P.alive[i]||!P.layer[i])continue;const ch=cheeseAt(P.x[i],P.z[i]);if(ch>0.18){c++;sx+=P.x[i];sz+=P.z[i];P.seam[i]=-1;}else P.seam[i]=0;}
   let seams=0;
   if(c){const cx=sx/c,cz=sz/c;POCKET.cx=cx;POCKET.cz=cz;
     for(let e=0;e<ED.n;e++){if(!ED.alive[e]||ED.type[e]!==1||ED.wk[e]!==1)continue;const a=ED.a[e];if(Math.hypot(P.x[a]-cx,P.z[a]-cz)<0.34)seams++;}}
-  POCKET.cnt=c;POCKET.sealed=c>=3&&seams>=3&&TIME.t>POCKET.vent;
+  POCKET.cnt=c;POCKET.sealed=c>=3&&seams>=3&&TIME.t>POCKET.vent&&!POCKET.opened;
   let tot=0,mx=0;
   for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
     if(P.seam[i]===-1){if(POCKET.sealed&&P.bake[i]>0.3&&(P.bakeR[i]>0||P.spring[i]>0))P.air[i]=Math.min(1,P.air[i]+dt*1.4*P.bake[i]);else if(POCKET.sealed&&!P.soft[i]&&P.air[i]>0.02)P.air[i]=P.air[i];else P.air[i]=Math.max(0,P.air[i]-dt*(POCKET.sealed?1.2:3.0));}
@@ -1312,7 +1321,7 @@ function pocketUpdate(dt){
 }
 
 /* ---- ring / hole detection ---- */
-const RING={has:false,checkAt:0,cx:0,cz:0,area:0,lastCheck:0};
+const RING={has:false,checkAt:0,cx:0,cz:0,area:0,lastCheck:0,expand:0,ex:0,ez:0};
 
 /* ================= dough heightfield ================= */
 const GF={};
@@ -1461,13 +1470,13 @@ function composeField(r){
     const lift=(GF.lf0[k]+GF.lf1[k])/ww;
     const m1=sstep(0.3,0.68,c1);
     const chRaw=GF.ch[k];const ch=chRaw*(c0>0.2||c1>0.2?1:0);
-    const chH=0.0105*ch/(1+0.28*ch);
+    const chH=0.0075*ch/(1+0.45*ch);
     const air=c1>0.01?GF.ar1[k]/w1:0;
     let y=GF.sup[k]+lift+h0;
     GF.ySurf[k]=y;
     y+=chH*(1-m1*0.25)+air*0.075*c1;
     y+=h1;
-    if(da>0){const x=GF.x0+i*cs,z=GF.z0+j*cs;const d2=((x-dx)*(x-dx)+(z-dz)*(z-dz))/(0.042*0.042);if(d2<9)y-=da*(0.014*Math.exp(-d2)-0.0035*Math.exp(-(d2-2.2)*(d2-2.2)));}
+    if(da>0){const x=GF.x0+i*cs,z=GF.z0+j*cs;const d2=((x-dx)*(x-dx)+(z-dz)*(z-dz))/(0.042*0.042);if(d2<9)y-=da*(0.022*Math.exp(-d2)-0.005*Math.exp(-(d2-2.2)*(d2-2.2)));}
     const vis=Math.max(c0,c1);
     GF.y[k]=y;GF.vis[k]=vis;
     const bk=c0>0.01||c1>0.01?lerp(GF.bk0[k]/w0,GF.bk1[k]/w1,m1):1;
@@ -1546,7 +1555,7 @@ function detectHoles(){
 
 /* ================= cheese, strands, fx ================= */
 const CHMAX=64;
-const CH={n:0,alive:new Uint8Array(CHMAX),x:new Float32Array(CHMAX),z:new Float32Array(CHMAX),a:new Float32Array(CHMAX),
+const CH={slide:0,n:0,alive:new Uint8Array(CHMAX),x:new Float32Array(CHMAX),z:new Float32Array(CHMAX),a:new Float32Array(CHMAX),
   vx:new Float32Array(CHMAX),vz:new Float32Array(CHMAX),anc:new Int32Array(CHMAX),ox:new Float32Array(CHMAX),oz:new Float32Array(CHMAX)};
 function clearCheese(){CH.n=0;CH.alive.fill(0);}
 function addCheese(x,z,a){if(CH.n>=CHMAX)return;const k=CH.n++;CH.alive[k]=1;CH.x[k]=x;CH.z[k]=z;CH.a[k]=a;CH.vx[k]=0;CH.vz[k]=0;CH.anc[k]=-1;}
@@ -1560,7 +1569,7 @@ function spawnCheeseOnDough(cx,cz,rad,count){
   const good=cand.filter(i=>{let m=1e9;for(const b of bnd){const d=Math.hypot(P.x[i]-P.x[b],P.z[i]-P.z[b]);if(d<m)m=d;}return m>0.085;});
   const pool=good.length>4?good:cand;
   for(let k=0;k<count&&pool.length;k++){const i=pool[Math.floor(rnd()*pool.length)];
-    addCheese(P.x[i]+(rnd()-0.5)*0.03,P.z[i]+(rnd()-0.5)*0.03,0.7+rnd()*0.45);}
+    addCheese(P.x[i]+(rnd()-0.5)*0.03,P.z[i]+(rnd()-0.5)*0.03,0.55+rnd()*0.35);}
 }
 function splatCheese(r){
   const cs=GF.cs,nx=GF.nx,ch=GF.ch;const sg=0.036/cs;const R=Math.ceil(sg*3);const inv=1/(2*sg*sg);
@@ -1587,9 +1596,10 @@ function cheeseUpdate(dt,plate){
     let cx=0,cz=0,cw=0;
     forNear(x,z,0.05,(j)=>{const d=Math.hypot(P.x[j]-x,P.z[j]-z);if(d>0.05)return;const w=1-d/0.05;cx+=(P.x[j]-P.fx[j])*w;cz+=(P.z[j]-P.fz[j])*w;cw+=w;});
     if(cw>0){cx/=cw;cz/=cw;}
-    const G=1.9;
-    if(sl>0.11){const f=(sl-0.11)/sl;CH.vx[k]-=gx*G*f*dt;CH.vz[k]-=gz*G*f*dt;}
-    CH.vx[k]*=Math.pow(0.12,dt);CH.vz[k]*=Math.pow(0.12,dt);
+    const G=4.0;
+    if(sl>0.045){const f=(sl-0.045)/sl;CH.vx[k]-=gx*G*f*dt;CH.vz[k]-=gz*G*f*dt;}
+    CH.vx[k]*=Math.pow(0.35,dt);CH.vz[k]*=Math.pow(0.35,dt);
+    CH.slide+=Math.hypot(CH.vx[k],CH.vz[k])*dt*CH.a[k];
     // cohesion
     for(let m=0;m<CH.n;m++){if(m===k||!CH.alive[m])continue;const dx=CH.x[m]-x,dz=CH.z[m]-z;const d=Math.hypot(dx,dz);if(d<0.07&&d>0.012){CH.vx[k]+=dx/d*0.02*dt;CH.vz[k]+=dz/d*0.02*dt;}}
     let nx2=x+CH.vx[k]*dt+cx*0.9,nz2=z+CH.vz[k]*dt+cz*0.9;
@@ -1866,7 +1876,7 @@ function dogEat(pc,shared){
   if(DOG.eating)return false;
   pieceStats(pc);
   DOG.eating={list:pc.list.slice(),t:0,cx:pc.cx,cz:pc.cz,shared:!!shared,area:pc.area};
-  for(const p of pc.list)P.ex[p]=P.x[p],P.ez[p]=P.z[p];
+  for(const p of pc.list){P.ex[p]=P.x[p];P.ez[p]=P.z[p];P.eat[p]=1;}
   // break strands attached
   for(const s of STR){if(pc.list.indexOf(s.a)>=0||pc.list.indexOf(s.b)>=0){if(!s.broken)s.broken=0.001;}}
   emit('dogEat',{x:pc.cx,z:pc.cz,shared:!!shared});
@@ -1890,7 +1900,7 @@ function dogEatUpdate(dt){
     const set=new Uint8Array(P.n);for(const p of E.list)set[p]=1;
     for(let t=0;t<TR.n;t++){if(TR.alive[t]&&(set[TR.a[t]]||set[TR.b[t]]||set[TR.c[t]]))killTri(t);}
     for(let e=0;e<ED.n;e++){if(ED.alive[e]&&(set[ED.a[e]]||set[ED.b[e]]))killEdge(e);}
-    for(const p of E.list)killP(p);
+    for(const p of E.list){P.eat[p]=0;killP(p);}
     for(let k=0;k<CH.n;k++){if(CH.alive[k]&&CH.anc[k]>=0&&set[CH.anc[k]])CH.alive[k]=0;}
     computeDerived();computePieces();
     fx(2,m[0],m[1]-0.05,m[2],8,0.03);
@@ -2048,9 +2058,9 @@ function setupDough(mask,rawTongue){
   let sx=0,sz=0,c=0;for(let i=0;i<P.n;i++){if(!P.alive[i]||P.bake[i]<0.9)continue;sx+=P.x[i];sz+=P.z[i];c++;}
   const ccx=c?sx/c:0,ccz=c?sz/c:-0.13;
   let rr=0;for(let i=0;i<P.n;i++){if(P.alive[i]&&P.bake[i]>0.9)rr=Math.max(rr,Math.hypot(P.x[i]-ccx,P.z[i]-ccz));}
-  spawnCheeseOnDough(ccx,ccz,Math.max(0.12,rr*0.7),Math.round(clamp(c/12,14,30)));
+  spawnCheeseOnDough(ccx,ccz,Math.max(0.12,rr*0.72),Math.round(clamp(c/9,18,44)));
   BANDS.length=0;STR.length=0;
-  POCKET.inflated=false;POCKET.air=0;RING.has=false;
+  POCKET.inflated=false;POCKET.air=0;POCKET.opened=false;POCKET.vent=0;RING.has=false;RING.expand=0;
   computePieces();
 }
 function captureOutline(){
@@ -2235,7 +2245,9 @@ function choosePlateInvite(){
   let best=-1,bd=-1;for(const i of big.list){if(!P.bnd[i])continue;const d=Math.hypot(P.x[i]-big.cx,P.z[i]-big.cz);if(d>bd){bd=d;best=i;}}
   if(best<0)return null;
   let dx=P.x[best]-big.cx,dz=P.z[best]-big.cz;const l=Math.hypot(dx,dz)||1;
-  if(PIECES.length>1&&big.area<0.05){return {i:best,dir:[LAY.dogZone.x-P.x[best],LAY.dogZone.z-P.z[best]].map(v=>v/Math.hypot(LAY.dogZone.x-P.x[best],LAY.dogZone.z-P.z[best])),dist:0.2,kind:'share'};}
+  for(const pc of PIECES){if(pc===big||pc.area<0.07||pc.list.some(i=>P.eat[i]))continue;
+    let c=pc.list[0],cd=1e9;for(const i of pc.list){const d=Math.hypot(P.x[i]-pc.cx,P.z[i]-pc.cz);if(d<cd){cd=d;c=i;}}
+    const dx=LAY.dogZone.x-P.x[c],dz=LAY.dogZone.z-P.z[c];const l=Math.hypot(dx,dz)||1;return {i:c,dir:[dx/l,dz/l],dist:Math.min(0.5,l),kind:'share'};}
   return {i:best,dir:[dx/l,dz/l],dist:0.08,kind:'snap'};
 }
 function inviteUpdate(dt){
@@ -2281,7 +2293,7 @@ function demoUpdate(dt){
   if(t>=0.75&&!DEMO.started){DEMO.started=true;
     const sc=worldToScreen(p0x,supportY(p0x,p0z)+0.03,p0z);
     if(beginAt(sc[0],sc[1],true)){DRAG.demo=true;}else{DEMO.active=false;}}
-  if(DEMO.started&&!DEMO.released&&DRAG.active&&DRAG.demo){DRAG.G[0]=gx;DRAG.G[1]=gz;DRAG.D[0]=gx-DRAG.G0[0];DRAG.D[1]=gz-DRAG.G0[1];}
+  if(DEMO.started&&!DEMO.released&&DRAG.active&&DRAG.demo){DRAG.G[0]=gx;DRAG.G[1]=gz;DRAG.fingerMax=Math.max(DRAG.fingerMax||0,Math.hypot(gx-DRAG.G0[0],gz-DRAG.G0[1]));DRAG.D[0]=gx-DRAG.G0[0];DRAG.D[1]=gz-DRAG.G0[1];}
   if(t>=1.95&&!DEMO.released){DEMO.released=true;if(DRAG.active&&DRAG.demo)endDrag(I.kind==='serve');}
   if(t>=2.8){DEMO.active=false;}
 }
@@ -2365,7 +2377,7 @@ function endDrag(cancel){
 function onDown(e){
   if(e.cancelable)e.preventDefault();
   SND.unlock();G.lastInput=TIME.t;G.demoArmed=true;
-  if(PTR.id!==-1)return; // ignore extra fingers
+  if(PTR.id!==-1){if(DRAG.active||TIME.t-PTR.t0<0.25)return; /* ignore extra fingers during a drag */ PTR.id=-1;}
   if(DEMO.active)cancelDemo();
   if(DRAG.active)endDrag(true);
   PTR.id=e.pointerId;PTR.x=e.clientX;PTR.y=e.clientY;PTR.t0=TIME.t;
@@ -2392,7 +2404,7 @@ function onCancel(e){
 function updateDragTarget(){
   if(!DRAG.active||DRAG.demo)return;
   const w=screenToSurface(clamp(PTR.x,-200,CAM.cssW+200),clamp(PTR.y,-200,CAM.cssH+200),0.035);
-  DRAG.G[0]=w[0];DRAG.G[1]=w[1];
+  DRAG.G[0]=w[0];DRAG.G[1]=w[1];DRAG.fingerMax=Math.max(DRAG.fingerMax||0,Math.hypot(w[0]-DRAG.G0[0],w[1]-DRAG.G0[1]));
   let sx=0,sz=0;if(DRAG.mode==='oven'&&DRAG.snapOff){const f=sstep(0,0.22,TIME.t-DRAG.t0);sx=-DRAG.snapOff[0]*f;sz=-DRAG.snapOff[1]*f;}
   DRAG.D[0]=w[0]-DRAG.G0[0]+sx;DRAG.D[1]=w[1]-DRAG.G0[1]+sz;
   // limit
@@ -2468,6 +2480,11 @@ function update(dt){
     computeDerived();
     pocketUpdate(dt);
     if(RING.checkAt&&TIME.t>RING.checkAt){RING.checkAt=0;ringCheck();}
+    if(RING.expand>0&&!DRAG.active){RING.expand-=dt;simAwake=Math.max(simAwake,0.3);
+      for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const dx=P.x[i]-RING.ex,dz=P.z[i]-RING.ez;const d=Math.hypot(dx,dz);if(d>0.13||d<1e-4)continue;
+        const f=(1-sstep(0.04,0.13,d))*0.075*dt;P.x[i]+=dx/d*f;P.z[i]+=dz/d*f;P.px[i]=P.x[i];P.pz[i]=P.z[i];}
+      for(let e=0;e<ED.n;e++){if(!ED.alive[e])continue;const a=ED.a[e];if(Math.abs(P.x[a]-RING.ex)+Math.abs(P.z[a]-RING.ez)>0.2)continue;ED.rest[e]=Math.hypot(P.x[ED.b[e]]-P.x[a],P.z[ED.b[e]]-P.z[a]);}
+      if(RING.expand<=0)RING.checkAt=TIME.t+0.1;}
     if(RING.has&&TIME.t-RING.lastCheck>0.8){ringCheck();}
     G.lastChMove=cheeseUpdate(dt,false);
     LIGHT.glow=lerp(LIGHT.glow,baking?1:0,1-Math.pow(0.02,dt));
@@ -2493,7 +2510,7 @@ function update(dt){
     LIGHT.glow=lerp(LIGHT.glow,G.arriveT>1.6?1:0,0.08);SND.sizzle(G.arriveT>1.6?0.6:0);DIAL.vel+=(G.arriveT>1.6?2.2:0)*dt*3;
   }
   // lift spring
-  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(ph==='serve'||(ph==='plate'&&DOG.eating&&DOG.eating.list.indexOf(i)>=0)||ph==='arrive')continue;
+  for(let i=0;i<P.n;i++){if(!P.alive[i])continue;if(ph==='serve'||(ph==='plate'&&P.eat[i])||ph==='arrive')continue;
     const tgt=P.liftT[i];P.liftV[i]+=((tgt-P.lift[i])*90-P.liftV[i]*9)*dt;P.lift[i]+=P.liftV[i]*dt;}
   for(let i=0;i<P.n;i++){if(P.alive[i]&&P.crack[i]>0&&!(DRAG.active&&DRAG.mode==='plate'))P.crack[i]=Math.max(0,P.crack[i]-dt*2);}
   DENT.amt=DRAG.active?Math.max(DENT.amt*Math.pow(0.5,dt*2),DRAG.press):Math.max(0,DENT.amt-dt*2.5);
@@ -2533,7 +2550,7 @@ function ringCheck(){
   if(!has&&RING.has&&TIME.t-(RING.seenT||0)<1.2)has=true;else if(has)RING.seenT=TIME.t;
   if(has&&!RING.has){RING.cx=h.x;RING.cz=h.z;RING.area=h.cnt;
     let joins=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&ED.type[e]===1&&ED.wk[e]===2)joins++;
-    if(joins){emit('ring',{x:h.x,z:h.z});achieve('d5a','ring hole '+h.cnt);}}
+    if(joins){emit('ring',{x:h.x,z:h.z});achieve('d5a','ring hole '+h.cnt);RING.expand=0.7;RING.ex=h.x;RING.ez=h.z;}}
   RING.has=has;if(has&&h&&h.cnt){RING.cx=h.x;RING.cz=h.z;RING.cells=h.cells;}else if(!has)RING.cells=null;
 }
 
@@ -2662,6 +2679,7 @@ function drawBlobGlow(a){
 const PERF={upd:0,ren:0,fieldSkips:0,fld:0,sim:0,why:''};
 let renderScale=1,frameAvg=16,frameCnt=0,lastTs=0,running=true,rafId=0;
 const FIXED=/[?&]fixed/.test(location.search);
+const DTMAX=/[?&]fast/.test(location.search)?0.1:0.05;
 function resize(){
   readSafe();
   const cw=Math.max(1,W.innerWidth||D.documentElement.clientWidth||1),ch=Math.max(1,W.innerHeight||D.documentElement.clientHeight||1);
@@ -2697,7 +2715,7 @@ function frame(ts){
   if(!running)return;
   rafId=requestAnimationFrame(frame);
   let dt=lastTs?(ts-lastTs)/1000:0.016;lastTs=ts;if(!(dt>0))dt=0.016;
-  const raw=dt;dt=Math.min(dt,0.05);
+  const raw=dt;dt=Math.min(dt,DTMAX);
   TIME.t+=dt;TIME.dt=dt;
   try{
     if(resizeT>0){resizeT-=dt;}
