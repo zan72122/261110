@@ -1491,7 +1491,7 @@ function onRelease(id, held) {
     const busyPiece = G.pieces.some(p => p.st === 'shell' || p.st === 'held' || p.st === 'fall' || p.st === 'tray');
     const dirNow = tilt > 0.01 ? Math.atan2(-G.top.plane[2], -G.top.plane[1]) : null;
     const dirChanged = G.stats.lastPieceDir == null || dirNow == null || Math.abs(angDiff(dirNow, G.stats.lastPieceDir)) > 0.6;
-    if (!busyPiece && G.stats.piecesPlaced < 6 && tilt > PIECE_TILT && (G.stats.pieceReady || dirChanged)) { startAction(actPlacePiece()); return; }
+    if (!busyPiece && G.stats.piecesPlaced < 5 && G.time - (G.stats.lastPieceT || -9) > 2.5 && tilt > PIECE_TILT && (G.stats.pieceReady || dirChanged)) { G.stats.lastPieceT = G.time; startAction(actPlacePiece()); return; }
     G.stats.timeB = (G.stats.timeB || 0) + held;
     if ((G.stats.pressB > 10 || G.stats.timeB > 30) && G.plateVol < V_OPEN && G.side.mode === 'gap' && !G.stats.guidedChip) { G.stats.guidedChip = true; G.side.angle = angWrap(G.top.chipWorld - 0.45); logEv('guideChip'); }
   } else if (G.phase === 'D') {
