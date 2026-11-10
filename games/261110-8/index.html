@@ -87,7 +87,7 @@ float fbm(vec2 p){float s=0.0,a=0.5;for(int i=0;i<4;i++){s+=a*noise(p);p=p*2.03+
 uniform vec3 uCam;uniform vec3 uKeyDir;uniform vec3 uKeyCol;uniform vec3 uOvenCol;uniform float uGlow;uniform float uWarm;uniform vec4 uOvenBox;uniform float uTime;uniform float uOvenOff;
 vec3 envMap(vec3 r,float rough){
  float y=r.y;
- vec3 sky=mix(vec3(0.16,0.13,0.11),vec3(0.50,0.52,0.56),smoothstep(-0.35,0.75,y));
+ vec3 sky=mix(vec3(0.38,0.26,0.15),vec3(0.50,0.52,0.56),smoothstep(-0.35,0.75,y));
  sky=mix(sky,vec3(0.62,0.58,0.52),smoothstep(0.75,1.0,y)*0.5);
  float w=mix(0.992,0.78,rough);
  vec3 a=normalize(vec3(-0.42,0.80,0.42));
@@ -97,7 +97,8 @@ vec3 envMap(vec3 r,float rough){
  vec3 c=normalize(vec3(0.15,0.55,0.82));
  float sc=smoothstep(w+0.002,w+(1.0-w)*0.5,dot(r,c));
  float k=mix(1.0,0.28,rough);
- return sky+(vec3(4.2,3.95,3.6)*sa+vec3(1.5,1.75,2.1)*sb+vec3(1.4,1.2,1.0)*sc*0.6)*k;
+ float win=smoothstep(0.30,0.24,abs(r.x+0.18))*smoothstep(0.42,0.60,y)*smoothstep(0.97,0.86,y);
+ return sky+(vec3(4.2,3.95,3.6)*sa+vec3(1.5,1.75,2.1)*sb+vec3(1.4,1.2,1.0)*sc*0.6)*k+vec3(0.55,0.60,0.66)*win*mix(0.45,0.2,rough);
 }
 vec3 tonemap(vec3 c){c*=0.78;c=(c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14);return pow(clamp(c,0.0,1.0),vec3(1.0/2.2));}
 float ovenMask(vec3 w){
@@ -113,7 +114,9 @@ vec3 ambientAt(vec3 w,vec3 n){
  vec3 gdir=normalize(vec3(0.0,0.35,-1.0));
  float back=clamp((w.z-uOvenBox.z),0.0,1.2);
  vec3 glow=vec3(1.0,0.42,0.12)*uGlow*(0.30+0.7*max(dot(n,-gdir),0.0)+0.25*max(-n.y,0.0))/(1.0+back*2.2);
- return mix(hemi,ov+glow,m);
+ vec2 sd=vec2(w.x*0.8,w.z-0.62);
+ vec3 spill=vec3(1.0,0.60,0.28)*uWarm*0.42*(0.35+0.65*max(n.y,0.0))/(1.0+dot(sd,sd)*7.0);
+ return mix(hemi+spill,ov+glow,m);
 }
 float keyAtt(vec3 w){return mix(1.0,0.92,ovenMask(w));}
 vec3 shadeStd2(vec3 base,vec3 n,vec3 v,vec3 w,float rough,float metal,float coat,float ao,float wrap,float sh){
@@ -133,7 +136,7 @@ vec3 shadeStd2(vec3 base,vec3 n,vec3 v,vec3 w,float rough,float metal,float coat
  vec3 envc=envMap(r,rough);
  float om=ovenMask(w);
  envc=mix(envc,envc*0.22+uOvenCol*0.32+vec3(1.0,0.45,0.15)*uGlow*0.6,om);
- col+=envc*Fe*ao*0.62;
+ col+=envc*Fe*ao*mix(0.62,1.05,metal);
  if(coat>0.0){
   float fc=0.04+0.96*pow(1.0-ndv,5.0);
   vec3 ec=envMap(r,0.06);ec=mix(ec,ec*0.4+uOvenCol*0.5+vec3(1.0,0.45,0.15)*uGlow*0.7,om);
@@ -178,7 +181,7 @@ void main(){
  } else if(kind>2.5&&kind<3.5){ /* copper brushed (dial / feet) */
   float ang=atan(vL.x,vL.z);float rr=length(vL.xz);
   float br=noise(vec2(rr*900.0,ang*2.0));
-  base=uCol*(0.86+0.2*br);rough=uRough+0.12*br;
+  base=uCol*(0.90+0.16*br);rough=uRough*0.8+0.10*br;
   float pat=smoothstep(0.55,0.9,noise(vL.xz*60.0+vL.y*30.0));base=mix(base,vec3(0.55,0.42,0.30),pat*0.12);
  } else if(kind>3.5&&kind<4.5){ /* ceramic plate */
   float rr=length(vL.xz)/max(uParam.x,0.001);
@@ -189,15 +192,18 @@ void main(){
   float f1=noise(vec2(vL.x*90.0+vL.z*40.0,vL.y*260.0));
   float f2=noise(vL.xy*35.0+vL.z*20.0);
   base=uCol*(0.80+0.26*f1)*(0.92+0.12*f2);
+  n=normalize(n+vec3(f1-0.5,f2-0.5,f1-f2)*0.38);
   wrap=0.45;rough=0.82;
   float rim=pow(1.0-max(dot(n,v),0.0),3.0);emit+=uCol*rim*0.35*(0.6+0.4*f1);
  } else if(kind>5.5&&kind<6.5){ /* skin */
   wrap=0.55;rough=0.55;
   float rim=pow(1.0-max(dot(n,v),0.0),2.5);emit+=vec3(0.9,0.35,0.25)*rim*0.18;
  } else if(kind>6.5&&kind<7.5){ /* tray steel */
-  float st=fbm(vW.xz*7.0);float fl=smoothstep(0.80,0.97,noise(vW.xz*150.0))*0.5;
-  base=mix(uCol,uCol*0.55,smoothstep(0.45,0.8,st)*0.6);
-  base=mix(base,vec3(0.86,0.83,0.78),fl*0.35);rough=uRough+st*0.15+fl*0.3;metal=uMetal*(1.0-fl*0.6);
+  float st=fbm(vW.xz*7.0);float fl=smoothstep(0.88,0.98,noise(vW.xz*150.0))*0.5;
+  float bru=noise(vec2(vW.x*5.0,vW.z*420.0));
+  base=mix(uCol,uCol*vec3(0.62,0.52,0.42),smoothstep(0.45,0.8,st)*0.7);
+  base*=0.88+0.2*bru;
+  base=mix(base,vec3(0.70,0.66,0.60),fl*0.10);rough=uRough+st*0.12+bru*0.08+fl*0.15;
  } else if(kind>7.5&&kind<8.5){ /* heating coil */
   float t=uParam.y;
   emit+=vec3(1.0,0.36,0.08)*uGlow*2.4*(0.75+0.25*sin(vL.x*40.0+uTime*2.0));
@@ -205,7 +211,8 @@ void main(){
  } else if(kind>8.5&&kind<9.5){ /* interior enamel */
   float sp=noise(vW.xz*60.0+vW.y*40.0);rough=uRough+sp*0.1;
  } else if(kind>9.5&&kind<10.5){ /* cheese strand */
-  base=mix(vec3(1.0,0.93,0.72),vec3(0.98,0.80,0.42),0.5+0.5*noise(vL.xy*30.0));wrap=0.5;
+  base=mix(vec3(0.97,0.86,0.58),vec3(0.95,0.72,0.34),0.5+0.5*noise(vL.xy*30.0));wrap=0.6;
+  float tr=1.0-max(dot(n,v),0.0);emit+=base*vec3(1.0,0.78,0.45)*(0.10+0.30*tr*tr);
  }
  vec3 col=shadeStd(base,n,v,vW,rough,metal,coat,ao*uAO,wrap)+emit;
  gl_FragColor=vec4(tonemap(col),uAlpha);
@@ -233,50 +240,54 @@ void main(){
  float e=0.004;
  float n0=noise(p*95.0);
  float nx=noise(p*95.0+vec2(e*95.0,0.0));float nz=noise(p*95.0+vec2(0.0,e*95.0));
- float bub=smoothstep(0.66,0.92,noise(p*58.0+3.1));
  float b0=noise(p*58.0+3.1);
+ float bubR=smoothstep(0.62,0.74,b0)*(1.0-smoothstep(0.78,0.88,b0));float bubC=smoothstep(0.82,0.94,b0);
  float bx=noise(p*58.0+3.1+vec2(e*58.0,0.0));float bz=noise(p*58.0+3.1+vec2(0.0,e*58.0));
  float chN=noise(p*16.0+2.7);float chM=smoothstep(0.10,0.42,ch+(chN-0.5)*0.22);
  float bumpS=mix(0.26,0.18,bake)*(1.0-chM*0.5);
  vec3 n=normalize(vN+vec3(-(nx-n0),0.0,-(nz-n0))*bumpS*1.6+vec3(-(bx-b0),0.0,-(bz-b0))*bumpS*1.2*(1.0-bake*0.4));
  vec3 v=normalize(uCam-vW);
  float nb2=noise(p*230.0);
- vec3 rawC=vec3(0.90,0.80,0.62)*(0.95+0.07*n0);
- float flour=smoothstep(0.55,0.9,noise(p*170.0+11.0))*(1.0-bake)*0.5;
- rawC=mix(rawC,vec3(1.0,0.99,0.96),flour);
- vec3 gold=vec3(0.84,0.54,0.23),brown=vec3(0.56,0.29,0.11),dark=vec3(0.27,0.13,0.05);
- float hi=clamp(0.18+0.62*crisp+0.30*puff*smoothstep(0.35,0.9,n0),0.0,1.0);
+ vec3 rawC=vec3(0.86,0.71,0.48)*(0.93+0.10*n0);
+ float fp=noise(p*31.0+11.0);
+ float flour=(smoothstep(0.45,0.85,fp)*0.22+smoothstep(0.50,0.80,fp)*smoothstep(0.60,0.85,nb2)*0.6)*(1.0-bake);
+ rawC=mix(rawC,vec3(0.97,0.96,0.93),flour);
+ rawC=mix(rawC,rawC*1.06+0.015,bubC*0.7);
+ vec3 gold=vec3(0.80,0.45,0.13),brown=vec3(0.52,0.22,0.05),dark=vec3(0.17,0.065,0.018);
+ float rim=1.0-smoothstep(0.55,0.97,vis);
+ float hi=clamp(0.20+0.60*crisp+0.42*puff*smoothstep(0.30,0.85,n0)+0.5*rim+0.25*bubC,0.0,1.0);
  vec3 bakedC=mix(gold,brown,hi);
  float spots=smoothstep(0.72,0.82,noise(p*24.0+5.0)*0.62+n0*0.38)*puff;
  bakedC=mix(bakedC,dark,spots*0.7);
  bakedC=mix(bakedC,dark*1.1,crisp*smoothstep(0.58,0.80,nb2)*0.55);
- bakedC=mix(bakedC,vec3(0.97,0.78,0.48),crisp*smoothstep(0.2,0.0,nb2)*0.25);
+ bakedC=mix(bakedC,vec3(0.95,0.66,0.30),crisp*smoothstep(0.2,0.0,nb2)*0.25);
  float bk=smoothstep(0.0,1.0,bake);
  vec3 dough=mix(rawC,bakedC,bk);
- dough=mix(dough,vec3(0.36,0.17,0.06),clamp(toast*0.95,0.0,0.9));
+ dough=mix(dough,vec3(0.22,0.085,0.022),clamp(toast*0.95,0.0,0.9));
  dough*=1.0-0.18*smoothstep(0.25,0.6,toast)*(1.0-smoothstep(0.6,0.95,toast));
- dough*=1.0-bub*0.16*(1.0-bake*0.4);
+ dough*=1.0-bubR*0.15*(1.0-bake*0.4);
  dough=mix(dough,dough*vec3(1.05,0.98,0.9),flap*0.15);
- vec3 chC=mix(vec3(0.98,0.90,0.66),vec3(0.98,0.80,0.44),bake*0.7);
+ vec3 chC=mix(vec3(0.95,0.82,0.48),vec3(0.95,0.68,0.27),bake*0.75);
  vec2 pr=vec2(p.x*0.8-p.y*0.6,p.x*0.6+p.y*0.8);vec2 pr2=vec2(pr.x*0.5-pr.y*0.87,pr.x*0.87+pr.y*0.5);
  float bn=noise(pr*21.0+7.0)*0.65+noise(pr2*47.0+1.0)*0.35;
  float chBl=smoothstep(0.62,0.80,bn)*bake*smoothstep(0.35,0.9,ch);
- chC=mix(chC,vec3(0.80,0.52,0.20),chBl*0.55);
- chC=mix(chC,vec3(0.62,0.33,0.10),smoothstep(0.78,0.9,bn)*bake*0.5);
- chC=mix(vec3(1.0,0.84,0.46),chC,smoothstep(0.15,0.75,chM));
- chC=mix(chC,vec3(0.55,0.30,0.10),clamp(toast*0.75,0.0,0.75));
+ chC=mix(chC,vec3(0.76,0.36,0.07),chBl*0.6);
+ chC=mix(chC,vec3(0.45,0.17,0.035),smoothstep(0.78,0.9,bn)*bake*0.5);
+ chC=mix(vec3(0.95,0.62,0.18),chC,smoothstep(0.15,0.75,chM));
+ chC=mix(chC,vec3(0.36,0.14,0.03),clamp(toast*0.75,0.0,0.75));
  float cb=noise(pr2*26.0+1.3);n=normalize(n+vec3(noise(pr2*26.0+vec2(0.6,1.3))-cb,0.0,noise(pr2*26.0+vec2(1.3,0.6))-cb)*chM*1.4);
  vec3 base=mix(dough,chC,chM);
- float rough=mix(mix(0.80,0.52,bk),0.2,chM);
- rough=mix(rough,0.38,crisp*0.5);
+ float rough=mix(mix(0.68,0.55,bk),0.2,chM);
+ rough=mix(rough,0.38,crisp*0.5);rough=mix(rough,0.95,flour);
  float wrap=mix(0.42,0.2,bk);
  float shd=0.25+0.75*vD.x;
  vec3 col=shadeStd2(base,n,v,vW,rough,0.0,0.0,ao*(0.75+0.25*vD.x),wrap,shd);
- float thinGlow=(1.0-bk)*0.08;
+ float thinGlow=(1.0-bk)*0.12;
  col+=base*vec3(1.0,0.75,0.45)*thinGlow;
  col*=1.0-crack*0.85;
  col*=1.0-seam*0.25;
- {vec3 hh=normalize(uKeyDir+v);float sp=pow(max(dot(n,hh),0.0),90.0);col+=uKeyCol*sp*0.55*chM*shd*keyAtt(vW);}
+ {vec3 hh=normalize(uKeyDir+v);float nh=max(dot(n,hh),0.0);float sp=pow(nh,90.0)*0.55+pow(nh,20.0)*0.07;col+=uKeyCol*sp*chM*shd*keyAtt(vW);}
+ col+=base*base*uKeyCol*0.07*chM*(0.4+0.6*shd);
  col+=vec3(1.0,0.78,0.42)*glw*0.32;
  col+=vec3(1.0,0.95,0.85)*air*0.06*smoothstep(0.6,1.0,n.y);
  gl_FragColor=vec4(tonemap(col),alpha);
@@ -307,10 +318,13 @@ void main(){
  vec3 refl=envMap(r,0.03+smudge*0.12);
  vec3 tint=mix(vec3(0.52,0.60,0.68),vec3(1.0,0.76,0.48),uWarm);
  float edge=max(smoothstep(0.035,0.0,vT.x),max(smoothstep(0.965,1.0,vT.x),max(smoothstep(0.035,0.0,vT.y),smoothstep(0.965,1.0,vT.y))));
+ float d=fract(vT.x*0.62-vT.y*0.42+0.12);
+ float wb=(smoothstep(0.0,0.012,d)*smoothstep(0.13,0.115,d)+smoothstep(0.165,0.175,d)*smoothstep(0.205,0.195,d)*0.6)*(0.6+0.4*smudge);
  float fr=clamp(F*(1.0+streak*1.6)+smudge*0.03,0.0,0.6);
- float a=clamp(fr+0.035+edge*0.35,0.0,0.8)*uAlpha;
+ float ab=fr+0.02+edge*0.35;float a=clamp(ab+wb*0.07,0.0,0.8)*uAlpha;
  vec3 c=mix(tonemap(tint*0.42),tonemap(refl*0.85),clamp(fr*9.0,0.0,1.0));
- c=mix(c,vec3(0.85,0.86,0.88),edge*0.5);
+ c=mix(c,tonemap(vec3(1.25,1.27,1.3)*mix(vec3(1.0),vec3(1.1,0.85,0.6),uWarm)),clamp(wb*0.07/max(ab+wb*0.07,0.001),0.0,1.0));
+ c=mix(c,vec3(0.64,0.76,0.72),edge*0.5);
  gl_FragColor=vec4(c,a);
 }`;
 
@@ -549,19 +563,19 @@ const MAT={
   inner:{col:[0.05,0.048,0.05],rough:0.40,metal:0,coat:0.4,kind:9},
   copper:{col:[0.96,0.62,0.45],rough:0.24,metal:1,coat:0,kind:3},
   copperDk:{col:[0.80,0.46,0.30],rough:0.32,metal:1,coat:0,kind:3},
-  steel:{col:[0.26,0.255,0.27],rough:0.36,metal:1,coat:0,kind:7},
+  steel:{col:[0.30,0.29,0.28],rough:0.40,metal:1,coat:0,kind:7},
   plate:{col:[0.935,0.93,0.905],rough:0.09,metal:0,coat:0.9,kind:4},
   wood:{col:[0.5,0.33,0.18],rough:0.5,metal:0,coat:0.3,kind:1},
   coil:{col:[0.25,0.20,0.17],rough:0.45,metal:0.7,coat:0,kind:8},
   fur:{col:[0.93,0.80,0.60],rough:0.85,metal:0,coat:0,kind:5},
   furDk:{col:[0.60,0.37,0.19],rough:0.85,metal:0,coat:0,kind:5},
-  furLt:{col:[0.99,0.93,0.82],rough:0.85,metal:0,coat:0,kind:5},
+  furLt:{col:[0.95,0.89,0.78],rough:0.85,metal:0,coat:0,kind:5},
   eye:{col:[0.012,0.010,0.010],rough:0.05,metal:0,coat:1.0,kind:0},
   nose:{col:[0.035,0.028,0.028],rough:0.30,metal:0,coat:0.7,kind:0},
   pink:{col:[0.90,0.42,0.46],rough:0.38,metal:0,coat:0.3,kind:6},
   collar:{col:[0.72,0.14,0.13],rough:0.42,metal:0,coat:0.35,kind:0},
   skin:{col:[0.88,0.63,0.50],rough:0.5,metal:0,coat:0,kind:6},
-  cuff:{col:[0.62,0.76,0.92],rough:0.75,metal:0,coat:0,kind:0},
+  cuff:{col:[0.62,0.76,0.92],rough:0.75,metal:0,coat:0,kind:5},
   cheese:{col:[1,0.9,0.6],rough:0.18,metal:0,coat:0.5,kind:10},
   glass:{col:[1,1,1],rough:0.02,metal:0,coat:0,kind:0}
 };
@@ -646,7 +660,7 @@ function buildScene(){
   // unit sphere for character parts
   {const g=Geo();gSphere(g,1,1,1,26,18);MESH.sphere=meshFromGeo(g);}
   {const g=Geo();gQuad(g,[-1,0,-1],[2,0,0],[0,0,2],[0,1,0]);MESH.blob=meshFromGeo(g);}
-  {const g=Geo();const pts=[];for(let k=0;k<=24;k++){const a=k/24*TAU;pts.push([Math.cos(a)*0.083,0,Math.sin(a)*0.083]);}gTube(g,pts,0.012,8);MESH.collar=meshFromGeo(g);}
+  {const g=Geo();const pts=[];for(let k=0;k<=24;k++){const a=k/24*TAU;pts.push([Math.cos(a)*0.083,0,Math.sin(a)*0.083]);}gTube(g,pts,0.0085,8);MESH.collar=meshFromGeo(g);}
   // fullscreen tri
   MESH.fs=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,MESH.fs);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
 }
@@ -792,7 +806,7 @@ const HAND_PARTS=[
   [0.041,0.028,0.079, 0.0112,0.0122,0.016, 0.5,0,0,'skin'],
   [0.056,0.031,0.087, 0.0102,0.0112,0.015, 0.5,0,0,'skin'],
   [-0.034,0.036,0.083, 0.0122,0.0118,0.026, -0.1,0.55,0,'skin'],
-  [0.010,0.052,0.158, 0.047,0.036,0.04, -0.2,0,0,'cuff']
+  [0.010,0.050,0.168, 0.042,0.031,0.054, -0.2,0,0,'cuff']
 ];
 const HAND={on:false,a:0,x:0,y:0,z:0,press:0,yaw:0};
 function drawHand(){
@@ -2232,6 +2246,10 @@ function chooseInvite(){
     else{const cc=cheeseCentroid();if(cc){const i=pickNear(bl,cc,0.04,0.5);if(i>=0){let dx=cc[0]-P.x[i],dz=cc[1]-P.z[i];const l=Math.hypot(dx,dz)||1;return {i,dir:[dx/l,dz/l],dist:Math.min(0.42,l+0.11),kind:'pocket'};}}}
   }
   // 6. d5: ring - two tips
+  if(!serveNow&&want('d5')&&RING.has&&G.rdone.d5a===1){
+    let best=-1,bs=-1;for(const i of bl){const dh=Math.hypot(P.x[i]-RING.cx,P.z[i]-RING.cz);if(dh>0.16)continue;const dc=Math.hypot(P.x[i]-cx,P.z[i]-cz);if(dc>bs){bs=dc;best=i;}}
+    if(best>=0){let dx=P.x[best]-RING.cx,dz=P.z[best]-RING.cz;const l=Math.hypot(dx,dz)||1;const room=roomAt(P.x[best],P.z[best],dx/l,dz/l);
+      if(room>0.08)return {i:best,dir:[dx/l,dz/l],dist:Math.min(0.16,room*0.8),kind:'ringpull'};}}
   if(!serveNow&&want('d5')){
     const tips=[];for(const i of bl){if(!P.kind[i])continue;const o=out(i);const r=Math.hypot(P.x[i]-cx,P.z[i]-cz);tips.push([i,r]);}
     tips.sort((a,b)=>b[1]-a[1]);
@@ -2262,7 +2280,7 @@ function inviteUpdate(dt){
   if(G.inviteEval<=0&&!DRAG.active){G.inviteEval=1.2;const prev=G.invite;const nv=chooseInvite();
     if(nv&&prev&&prev.kind===nv.kind&&P.alive[prev.i]&&Math.hypot(P.x[prev.i]-P.x[nv.i],P.z[prev.i]-P.z[nv.i])<0.12){G.invite=prev;prev.dir=nv.dir;prev.dist=nv.dist;}else{G.invite=nv;G.invDecay=0.6;GF.forceFrames=45;if(nv)G.inviteT=0;}}
   const inv=G.invite;
-  if(inv&&G.phase==='oven'){const key={ear:'d1',wing:'d1',rewind:'d2',pivot:'d3',pocket:'d4',open:'d4',ring:'d5'}[inv.kind];
+  if(inv&&G.phase==='oven'){const key={ear:'d1',wing:'d1',rewind:'d2',pivot:'d3',pocket:'d4',open:'d4',ring:'d5',ringpull:'d5'}[inv.kind];
     if(key&&TIME.t-G.lastInput<20){G.rto[key]=(G.rto[key]||0)+dt;if(G.rto[key]>55&&G.rdone[key]!==1){G.rdone[key]='skip';G.inviteEval=0;}}}
   for(let i=0;i<P.n;i++){P.sag[i]*=0.85;P.glow[i]*=0.85;}
   G.inviteAnim=G.invDecay>0;if(G.invDecay>0)G.invDecay-=dt;
