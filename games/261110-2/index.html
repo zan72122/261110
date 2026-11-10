@@ -1,0 +1,4014 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" content="#5b6672">
+<title>おとなりに、ぴょんをどうぞ！</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#59636e;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;
+  touch-action:none;overscroll-behavior:none;position:fixed;inset:0}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+#overlay{position:fixed;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+#safe{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;
+  padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px)}
+#fallback{display:none;position:fixed;inset:0;background:radial-gradient(circle at 50% 60%,#4169e1 0,#2a3f8f 40%,#59636e 41%)}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<canvas id="overlay"></canvas>
+<div id="safe"></div>
+<div id="fallback"></div>
+<script>
+'use strict';
+// ===================================================================
+//  Math
+// ===================================================================
+const PI = Math.PI, TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const damp = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp(-rate * dt));
+const srgb = (r, g, b) => [Math.pow(r, 2.2), Math.pow(g, 2.2), Math.pow(b, 2.2)];
+const hex = (h) => srgb(((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255);
+
+const V = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
+  dist: (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]),
+};
+// rotate vector around Y by angle
+function rotY(v, a) { const c = Math.cos(a), s = Math.sin(a); return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c]; }
+function rotX(v, a) { const c = Math.cos(a), s = Math.sin(a); return [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c]; }
+function rotZ(v, a) { const c = Math.cos(a), s = Math.sin(a); return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]]; }
+
+const M4 = {
+  create() { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; },
+  mul(o, a, b) {
+    const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3], a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7],
+      a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11], a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+    for (let i = 0; i < 4; i++) {
+      const b0 = b[i * 4], b1 = b[i * 4 + 1], b2 = b[i * 4 + 2], b3 = b[i * 4 + 3];
+      o[i * 4] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+      o[i * 4 + 1] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+      o[i * 4 + 2] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+      o[i * 4 + 3] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+    }
+    return o;
+  },
+  persp(o, fovy, aspect, near, far) {
+    const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    o.fill(0); o[0] = f / aspect; o[5] = f; o[10] = (far + near) * nf; o[11] = -1; o[14] = 2 * far * near * nf; return o;
+  },
+  lookAt(o, eye, t, up) {
+    let z = V.norm(V.sub(eye, t)); let x = V.norm(V.cross(up, z)); const y = V.cross(z, x);
+    o[0] = x[0]; o[1] = y[0]; o[2] = z[0]; o[3] = 0;
+    o[4] = x[1]; o[5] = y[1]; o[6] = z[1]; o[7] = 0;
+    o[8] = x[2]; o[9] = y[2]; o[10] = z[2]; o[11] = 0;
+    o[12] = -V.dot(x, eye); o[13] = -V.dot(y, eye); o[14] = -V.dot(z, eye); o[15] = 1; return o;
+  },
+  // basis columns bx,by,bz (already scaled), translation t
+  basis(o, bx, by, bz, t) {
+    o[0] = bx[0]; o[1] = bx[1]; o[2] = bx[2]; o[3] = 0;
+    o[4] = by[0]; o[5] = by[1]; o[6] = by[2]; o[7] = 0;
+    o[8] = bz[0]; o[9] = bz[1]; o[10] = bz[2]; o[11] = 0;
+    o[12] = t[0]; o[13] = t[1]; o[14] = t[2]; o[15] = 1; return o;
+  },
+  // normal matrix (inverse transpose of upper 3x3) into Float32Array(9)
+  normal(o, m) {
+    const a00 = m[0], a01 = m[1], a02 = m[2], a10 = m[4], a11 = m[5], a12 = m[6], a20 = m[8], a21 = m[9], a22 = m[10];
+    const b01 = a22 * a11 - a12 * a21, b11 = -a22 * a10 + a12 * a20, b21 = a21 * a10 - a11 * a20;
+    let det = a00 * b01 + a01 * b11 + a02 * b21; det = det ? 1 / det : 0;
+    o[0] = b01 * det; o[1] = (-a22 * a01 + a02 * a21) * det; o[2] = (a12 * a01 - a02 * a11) * det;
+    o[3] = b11 * det; o[4] = (a22 * a00 - a02 * a20) * det; o[5] = (-a12 * a00 + a02 * a10) * det;
+    o[6] = b21 * det; o[7] = (-a21 * a00 + a01 * a20) * det; o[8] = (a11 * a00 - a01 * a10) * det;
+    // transpose
+    let t = o[1]; o[1] = o[3]; o[3] = t; t = o[2]; o[2] = o[6]; o[6] = t; t = o[5]; o[5] = o[7]; o[7] = t;
+    return o;
+  },
+  xform(m, p) {
+    const x = p[0], y = p[1], z = p[2];
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w, w];
+  },
+};
+// orthonormal basis whose Y axis = dir
+function basisFromY(dir, hint) {
+  const y = V.norm(dir);
+  let ref = hint || [0, 0, 1];
+  if (Math.abs(V.dot(ref, y)) > 0.95) ref = [1, 0, 0];
+  const x = V.norm(V.cross(y, ref));
+  const z = V.cross(x, y);
+  return [x, y, z];
+}
+
+// deterministic small PRNG (for variety; game causes stay clear)
+let _seed = 1234567;
+function rnd() { _seed = (_seed * 1664525 + 1013904223) >>> 0; return _seed / 4294967296; }
+
+// ===================================================================
+//  WebGL helpers
+// ===================================================================
+const canvas = document.getElementById('stage');
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+let gl = null;
+try {
+  const opts = { antialias: true, alpha: false, depth: true, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
+  gl = canvas.getContext('webgl', opts) || canvas.getContext('experimental-webgl', opts);
+} catch (e) { gl = null; }
+const GLX = { deriv: null, uint: null };
+if (gl) {
+  GLX.deriv = gl.getExtension('OES_standard_derivatives');
+  GLX.uint = gl.getExtension('OES_element_index_uint');
+}
+const HP = (() => {
+  if (!gl) return false;
+  try { const f = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT); return !!(f && f.precision > 0); } catch (e) { return false; }
+})();
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS) && !gl.isContextLost()) {
+    const log = gl.getShaderInfoLog(s);
+    throw new Error('shader: ' + log + '\n' + src.split('\n').map((l, i) => (i + 1) + ': ' + l).join('\n'));
+  }
+  return s;
+}
+const ATTRS = ['a_pos', 'a_nrm', 'a_uv', 'a_ext'];
+function program(vs, fs) {
+  const pre = (HP ? 'precision highp float;\n' : 'precision mediump float;\n');
+  const fsPre = (GLX.deriv ? '#extension GL_OES_standard_derivatives : enable\n#define HAS_DERIV 1\n' : '') + pre;
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, 'precision highp float;\n' + vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsPre + fs));
+  ATTRS.forEach((n, i) => gl.bindAttribLocation(p, i, n));
+  gl.bindAttribLocation(p, 0, 'a_xz'); gl.bindAttribLocation(p, 1, 'a_h');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS) && !gl.isContextLost()) throw new Error('link: ' + gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(p, i);
+    const name = info.name.replace(/\[0\]$/, '');
+    U[name] = gl.getUniformLocation(p, info.name);
+  }
+  return { p, U };
+}
+
+// Mesh: interleaved float attributes [pos3, nrm3, uv2, ext3] (stride 11 floats)
+const STRIDE = 11;
+function makeMesh(verts, idx, dynamic) {
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), dynamic ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+  const ibo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+  const big = (verts.length / STRIDE) > 65535;
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, big ? new Uint32Array(idx) : new Uint16Array(idx), gl.STATIC_DRAW);
+  return { vbo, ibo, count: idx.length, type: big ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
+}
+function bindMesh(m) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ibo);
+  const S = STRIDE * 4;
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, S, 24);
+  gl.vertexAttribPointer(3, 3, gl.FLOAT, false, S, 32);
+}
+function drawMesh(m) { gl.drawElements(gl.TRIANGLES, m.count, m.type, 0); }
+
+// ---------- procedural geometry builders ----------
+function pushV(arr, p, n, uv, e) {
+  arr.push(p[0], p[1], p[2], n[0], n[1], n[2], uv ? uv[0] : 0, uv ? uv[1] : 0, e ? e[0] : 0, e ? e[1] : 0, e ? e[2] : 0);
+}
+// grid surface generator: f(u,v) -> {p, n, uv?, e?}
+function surface(nu, nv, f, closeU) {
+  const verts = [], idx = [];
+  for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
+    const r = f(i / nu, j / nv); pushV(verts, r.p, r.n, r.uv || [i / nu, j / nv], r.e);
+  }
+  const row = nu + 1;
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+    const a = j * row + i, b = a + 1, c = a + row, d = c + 1;
+    idx.push(a, c, b, b, c, d);
+  }
+  return { verts, idx };
+}
+// unit sphere (radius 1); uv: u around (atan from +z), v from top
+function sphereGeo(nu, nv, deform) {
+  return surface(nu, nv, (u, v) => {
+    const th = (u - 0.5) * TAU, ph = (0.5 - v) * PI;
+    const n = [Math.sin(th) * Math.cos(ph), Math.sin(ph), Math.cos(th) * Math.cos(ph)];
+    let p = n.slice();
+    if (deform) { const d = deform(th, ph, n); p = d.p; return { p, n: d.n || n, uv: d.uv || [u, v], e: d.e }; }
+    return { p, n, uv: [u, v] };
+  });
+}
+// capsule for vertex-shader sizing: ext.x = side (-1 bottom cap, +1 top cap), unit normal; pos = normal
+function capsuleGeo(nu, nvCap) {
+  const verts = [], idx = [];
+  const rows = [];
+  // bottom cap: phi from -pi/2 to 0, then top cap 0..pi/2 (duplicated equator rows form cylinder)
+  for (let j = 0; j <= nvCap; j++) rows.push({ ph: -PI / 2 + (j / nvCap) * PI / 2, side: -1 });
+  for (let j = 0; j <= nvCap; j++) rows.push({ ph: (j / nvCap) * PI / 2, side: 1 });
+  rows.forEach((r, j) => {
+    for (let i = 0; i <= nu; i++) {
+      const th = (i / nu) * TAU;
+      const n = [Math.sin(th) * Math.cos(r.ph), Math.sin(r.ph), Math.cos(th) * Math.cos(r.ph)];
+      pushV(verts, n, n, [i / nu, j / (rows.length - 1)], [r.side, 0, 0]);
+    }
+  });
+  const row = nu + 1;
+  for (let j = 0; j < rows.length - 1; j++) for (let i = 0; i < nu; i++) {
+    const a = j * row + i, b = a + 1, c = a + row, d = c + 1;
+    idx.push(a, b, c, b, d, c);
+  }
+  return { verts, idx };
+}
+// rounded box centered at origin with half extents hx,hy,hz and radius r (superellipsoid-like via sphere projection)
+function roundedBoxGeo(hx, hy, hz, r, seg) {
+  const verts = [], idx = [];
+  const faces = [
+    [[1, 0, 0], [0, 0, -1], [0, 1, 0]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]],
+    [[0, 1, 0], [1, 0, 0], [0, 0, -1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+    [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]],
+  ];
+  const ix = hx - r, iy = hy - r, iz = hz - r;
+  faces.forEach(([nrm, ua, va]) => {
+    const base = verts.length / STRIDE;
+    for (let j = 0; j <= seg; j++) for (let i = 0; i <= seg; i++) {
+      const a = (i / seg) * 2 - 1, b = (j / seg) * 2 - 1;
+      // point on cube surface [-1,1]^3
+      const c = [nrm[0] + ua[0] * a + va[0] * b, nrm[1] + ua[1] * a + va[1] * b, nrm[2] + ua[2] * a + va[2] * b];
+      // inner box point
+      const inner = [clamp(c[0] * hx, -ix, ix), clamp(c[1] * hy, -iy, iy), clamp(c[2] * hz, -iz, iz)];
+      const outer = [c[0] * hx, c[1] * hy, c[2] * hz];
+      let d = V.sub(outer, inner); const dl = V.len(d);
+      const n = dl > 1e-6 ? V.scale(d, 1 / dl) : nrm;
+      const p = V.add(inner, V.scale(n, r));
+      pushV(verts, p, n, [p[0], p[2]], [p[1], 0, 0]);
+    }
+    const row = seg + 1;
+    for (let j = 0; j < seg; j++) for (let i = 0; i < seg; i++) {
+      const a = base + j * row + i, b = a + 1, c = a + row, d = c + 1;
+      idx.push(a, b, c, b, d, c);
+    }
+  });
+  return { verts, idx };
+}
+// cylinder along Y from y0 to y1 radius r (open ends ok)
+function cylinderGeo(r, y0, y1, nu) {
+  return surface(nu, 1, (u, v) => {
+    const th = u * TAU; const n = [Math.sin(th), 0, Math.cos(th)];
+    return { p: [n[0] * r, lerp(y0, y1, v), n[2] * r], n };
+  });
+}
+function mergeGeo(list) {
+  const verts = [], idx = [];
+  list.forEach(g => { const base = verts.length / STRIDE; g.verts.forEach(x => verts.push(x)); g.idx.forEach(i => idx.push(i + base)); });
+  return { verts, idx };
+}
+function xformGeo(g, m, nm) {
+  const out = g.verts.slice();
+  for (let i = 0; i < out.length; i += STRIDE) {
+    const p = M4.xform(m, [out[i], out[i + 1], out[i + 2]]);
+    out[i] = p[0]; out[i + 1] = p[1]; out[i + 2] = p[2];
+    if (nm) {
+      const x = out[i + 3], y = out[i + 4], z = out[i + 5];
+      const n = V.norm([nm[0] * x + nm[3] * y + nm[6] * z, nm[1] * x + nm[4] * y + nm[7] * z, nm[2] * x + nm[5] * y + nm[8] * z]);
+      out[i + 3] = n[0]; out[i + 4] = n[1]; out[i + 5] = n[2];
+    }
+  }
+  return { verts: out, idx: g.idx };
+}
+// ===================================================================
+//  Shaders
+// ===================================================================
+const GLSL_COMMON = `
+uniform vec3 u_eye;
+uniform vec4 u_occ[18];
+uniform float u_nocc;
+uniform float u_time;
+uniform float u_exposure;
+uniform vec3 u_lk;
+#define LK u_lk
+const vec3 CKEY = vec3(1.02, 1.06, 1.12);
+const vec3 SKY = vec3(0.50, 0.56, 0.64);
+const vec3 FOGC = vec3(0.46, 0.50, 0.55);
+float occShadow(vec3 p){
+  float s = 1.0;
+  for (int i = 0; i < 18; i++) {
+    if (float(i) >= u_nocc) break;
+    vec4 o = u_occ[i];
+    float h = o.y - p.y;
+    if (h <= 0.0) continue;
+    vec2 c = o.xz - (LK.xz / LK.y) * h;
+    float d = length(p.xz - c);
+    float w = 0.025 + h * 0.42;
+    float core = o.w * 0.8;
+    float k = 1.0 - smoothstep(core - w * 0.45, core + w, d);
+    float st = clamp(0.95 * o.w / (o.w + h * 1.1), 0.0, 0.5);
+    s = min(s, 1.0 - k * st);
+  }
+  return s;
+}
+float tubes(vec3 p, vec3 R, float blur){
+  if (R.y < 0.01) return 0.0;
+  float t = (6.2 - p.y) / R.y;
+  vec3 q = p + R * t;
+  float rz = abs(fract((q.z + 0.7) / 2.8) - 0.5) * 2.8;
+  float rx = abs(fract((q.x + 1.1) / 3.6) - 0.5) * 3.6;
+  float w = 0.08 + blur;
+  float a = 1.0 - smoothstep(w * 0.35, w, rz);
+  float b = 1.0 - smoothstep(1.3, 1.36 + blur * 3.0, rx);
+  return a * b * smoothstep(0.0, 0.3, R.y) * (0.6 + 0.4 / (1.0 + blur * 6.0));
+}
+uniform sampler2D u_shw;
+uniform vec4 u_shwR; // x0, z0, 1/w, 1/h (world)
+vec2 shwUV(vec2 xz){ return vec2((xz.x - u_shwR.x) * u_shwR.z, (xz.y - u_shwR.y) * u_shwR.w); }
+float shwIn(vec2 uv){ return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0); }
+vec3 tonemap(vec3 c){
+  c *= u_exposure;
+  c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
+  return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+vec3 fog(vec3 c, vec3 p){
+  float d = length(p - u_eye);
+  return mix(c, FOGC, clamp(1.0 - exp(-max(d - 6.0, 0.0) * 0.035), 0.0, 0.55));
+}
+float hash21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x), mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y); }
+`;
+
+// ---------------- environment (floor, walls, mats, pads, frame) ----------------
+const VS_ENV = `
+attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec2 a_uv; attribute vec3 a_ext;
+uniform mat4 u_vp;
+varying vec3 v_wp; varying vec3 v_n; varying vec2 v_uv; varying vec3 v_ext;
+void main(){ v_wp = a_pos; v_n = a_nrm; v_uv = a_uv; v_ext = a_ext; gl_Position = u_vp * vec4(a_pos, 1.0); }
+`;
+const FS_ENV = GLSL_COMMON + `
+varying vec3 v_wp; varying vec3 v_n; varying vec2 v_uv; varying vec3 v_ext;
+uniform vec2 u_link;
+uniform float u_reveal;
+uniform vec2 u_bounds;
+uniform vec4 u_ripple; // x,z,age,strength (unrelated touch wobble)
+float rectSD(vec2 p, vec2 h){ vec2 d = abs(p) - h; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
+void main(){
+  vec3 N = normalize(v_n);
+  vec3 P = v_wp;
+  vec3 Vd = normalize(u_eye - P);
+  float kind = floor(v_ext.x + 0.5);
+  vec3 base = vec3(0.3); float spec = 0.04; float blur = 0.3; float rough = 0.5;
+  vec3 extra = vec3(0.0);
+  float trampShadow = 1.0;
+  if (kind < 0.5) { // gym floor (grey, polished)
+    float n1 = vnoise(P.xz * 3.1) * 0.5 + vnoise(P.xz * 11.0) * 0.3 + vnoise(P.xz * 0.6) * 0.2;
+    base = vec3(0.205, 0.215, 0.228) * (0.86 + 0.22 * n1);
+    // lime court lines
+    float lw = 0.028;
+    float l1 = 1.0 - smoothstep(lw * 0.7, lw, abs(P.z - 2.25));
+    float l2 = 1.0 - smoothstep(lw * 0.7, lw, abs(abs(P.x) - 3.45));
+    float r = length(P.xz - vec2(0.0, 5.6));
+    float l3 = 1.0 - smoothstep(lw * 0.7, lw, abs(r - 2.6));
+    float l4 = 1.0 - smoothstep(lw * 0.7, lw, abs(P.z + 2.9));
+    float line = max(max(l1, l2 * step(P.z, 4.8)), max(l3 * step(P.z, 5.6), l4));
+    base = mix(base, vec3(0.42, 0.78, 0.035), line * 0.92);
+    spec = 0.05; blur = 0.16 + 0.08 * n1;
+  } else if (kind < 1.5) { // painted wall
+    base = vec3(0.47, 0.52, 0.58) * (0.95 + 0.05 * vnoise(P.xy * 4.0));
+    float br = 1.0 - smoothstep(0.004, 0.012, abs(fract(P.y / 0.3) - 0.5) * 0.3);
+    base *= 1.0 - br * 0.05;
+    spec = 0.02; blur = 0.6;
+  } else if (kind < 2.5) { // wall pads (royal blue)
+    base = vec3(0.025, 0.06, 0.34);
+    float sx = abs(fract(P.x / 1.2) - 0.5) * 1.2;
+    base *= 0.55 + 0.45 * smoothstep(0.0, 0.03, sx);
+    spec = 0.07; blur = 0.18;
+  } else if (kind < 3.5) { // floor mat (royal blue)
+    base = vec3(0.032, 0.080, 0.46) * (0.93 + 0.1 * vnoise(P.xz * 7.0));
+    float gx = abs(fract(P.x / 1.1 + 0.5) - 0.5) * 1.1;
+    float gz = abs(fract(P.z / 1.1 + 0.5) - 0.5) * 1.1;
+    float g = min(gx, gz);
+    base *= 0.6 + 0.4 * smoothstep(0.004, 0.016, g);
+    spec = 0.06; blur = 0.16;
+  } else if (kind < 4.5) { // trampoline frame pads (royal blue vinyl)
+    base = vec3(0.038, 0.095, 0.56);
+    float segx = min(abs(P.x - u_bounds.y), abs(P.x - u_bounds.x));
+    float seamCut = 1.0 - (1.0 - smoothstep(0.006, 0.016, segx)) * (1.0 - u_reveal * 0.85);
+    base *= 0.55 + 0.45 * seamCut;
+    // piping edge stitches
+    float edge = v_ext.y;
+    base *= 0.9 + 0.1 * smoothstep(0.0, 0.02, edge);
+    spec = 0.11; blur = 0.09;
+    // reveal glow sweep along the frame
+    float sweep = u_reveal * (1.0 - u_reveal) * 4.0;
+    extra += vec3(0.25, 0.35, 0.6) * sweep * 0.25;
+  } else if (kind < 5.5) { // metal frame
+    base = vec3(0.50, 0.53, 0.56);
+    spec = 0.9; blur = 0.015; rough = 0.15;
+  } else { // dark spring gap / under
+    base = vec3(0.02, 0.025, 0.04);
+    spec = 0.02; blur = 0.5;
+  }
+  // shadows (baked top-down map: r = pad/cloth level, g = floor level)
+  vec2 suv = shwUV(P.xz);
+  vec4 st = texture2D(u_shw, suv);
+  float inMap = shwIn(suv);
+  float sh = mix(1.0, (kind > 3.5 && kind < 4.5) ? st.r : st.g, inMap);
+  if (kind < 0.5 || (kind > 2.5 && kind < 3.5)) {
+    float sd = rectSD(P.xz - vec2(0.0, -0.03), vec2(2.2, 1.43));
+    trampShadow = mix(0.38, 1.0, smoothstep(-0.25, 0.55, sd));
+  }
+  // ripple wobble for unrelated touches (tiny local shimmer)
+  if (u_ripple.w > 0.0) {
+    float rd = length(P.xz - u_ripple.xy);
+    float wv = sin(rd * 40.0 - u_ripple.z * 18.0) * exp(-rd * 9.0) * u_ripple.w;
+    N = normalize(N + vec3(wv * 0.25, 0.0, wv * 0.25));
+  }
+  float ndl = max(dot(N, LK), 0.0);
+  vec3 amb = mix(vec3(0.20, 0.21, 0.24), SKY, N.y * 0.5 + 0.5);
+  vec3 col = base * (amb * 0.85 + CKEY * ndl * 0.95 * sh) * trampShadow;
+  vec3 R = reflect(-Vd, N);
+  float fres = 0.04 + 0.96 * pow(1.0 - max(dot(N, Vd), 0.0), 5.0);
+  float tb = tubes(P, R, blur);
+  float hl = pow(max(dot(R, LK), 0.0), mix(400.0, 20.0, rough));
+  if (kind > 4.5 && kind < 5.5) {
+    col = base * 0.22 * amb + base * tb * 2.4 + base * hl * 1.5 * sh + vec3(0.03) * (1.0 - N.y);
+    col *= trampShadow;
+  } else {
+    col += (tb * 1.3 + hl * 0.6) * spec * (0.4 + fres) * sh * trampShadow * vec3(0.95, 1.0, 1.08) * 2.0;
+  }
+  col += extra;
+  gl_FragColor = vec4(tonemap(fog(col, P)), 1.0);
+}
+`;
+
+// ---------------- the cloth sheet ----------------
+const VS_CLOTH = `
+attribute vec2 a_xz; attribute vec4 a_h; // h, dhdx, dhdz, strain
+uniform mat4 u_vp;
+varying vec3 v_wp; varying vec3 v_n; varying float v_strain;
+void main(){
+  vec3 p = vec3(a_xz.x, a_h.x, a_xz.y);
+  v_wp = p; v_n = normalize(vec3(-a_h.y, 1.0, -a_h.z)); v_strain = a_h.w;
+  gl_Position = u_vp * vec4(p, 1.0);
+}
+`;
+const FS_CLOTH = GLSL_COMMON + `
+varying vec3 v_wp; varying vec3 v_n; varying float v_strain;
+uniform float u_sx[5];
+uniform float u_sz[3];
+uniform vec4 u_inv;      // axis(0=horizontal z-const,1=vertical x-const), fixed coord, a, b
+uniform float u_invOn;
+uniform vec4 u_finger;   // x,z,r,active
+uniform vec4 u_trail[10];// x,z,strength,0
+uniform vec2 u_link;     // left/right boundary openness 0..1
+uniform float u_demo;
+uniform vec2 u_sheetH;
+const float PI = 3.14159265;
+// returns vec3(coverage, bump, groove) for a seam whose across-distance is t and along coord is s
+vec3 seamPattern(float t, float s, float isBoundary, float aa){
+  float at = abs(t);
+  // raised ridge from seam allowance
+  float ridgeW = mix(0.030, 0.045, isBoundary);
+  float ridge = 1.0 - smoothstep(ridgeW * 0.4, ridgeW, at);
+  float groove = 1.0 - smoothstep(0.002, 0.007 + aa, at);
+  // two stitch rows
+  float row = mix(0.019, 0.030, isBoundary);
+  float tw = 0.0075;
+  float d1 = abs(at - row);
+  float period = 0.066, len = 0.046;
+  float ds = fract(s / period + 0.25 * step(0.0, t)) * period;
+  float along = smoothstep(0.0, 0.006 + aa, ds) * (1.0 - smoothstep(len - 0.006 - aa, len, ds));
+  float across = 1.0 - smoothstep(tw * 0.55, tw + aa, d1);
+  float stitch = along * across;
+  // fade pattern into average when sub-pixel
+  float lod = smoothstep(0.012, 0.03, aa);
+  stitch = mix(stitch, across * 0.62, lod);
+  float bump = across * sqrt(max(1.0 - (d1 * d1) / (tw * tw), 0.0)) * along * (1.0 - lod);
+  return vec3(stitch, bump * 0.6 + ridge * 0.4, groove * (1.0 - lod * 0.5) + ridge * 0.0001);
+}
+void main(){
+  vec3 P = v_wp;
+  vec3 N = normalize(v_n);
+  vec3 Vd = normalize(u_eye - P);
+  float aa = 0.004;
+#ifdef HAS_DERIV
+  aa = max(fwidth(P.x), fwidth(P.z)) * 0.9;
+#else
+  aa = 0.0012 * length(u_eye - P);
+#endif
+  // ---- weave (plain weave with lod fade) ----
+  float freq = 40.0;
+  vec2 g = P.xz * freq;
+  vec2 f = fract(g); vec2 c = floor(g);
+  float alt = mod(c.x + c.y, 2.0);
+  float hw = sin(f.x * PI), hf = sin(f.y * PI);
+  float weaveLod = 1.0 - smoothstep(0.18, 0.45, aa * freq);
+  vec2 dh = (alt < 0.5) ? vec2(cos(f.x * PI) * PI, 0.0) : vec2(0.0, cos(f.y * PI) * PI);
+  vec3 Nw = normalize(N + vec3(-dh.x, 0.0, -dh.y) * 0.02 * weaveLod);
+  float weaveShade = mix(0.97, 0.9 + 0.1 * mix(hw, hf, alt), weaveLod);
+  // ---- seams ----
+  float stitch = 0.0, bump = 0.0, groove = 0.0, isInv = 0.0, near = 0.0;
+  float tension = 0.0;
+  // horizontal seams
+  for (int i = 0; i < 3; i++) {
+    float t = P.z - u_sz[i];
+    if (abs(t) < 0.06) {
+      vec3 sp = seamPattern(t, P.x, 0.0, aa);
+      if (sp.x > stitch) stitch = sp.x;
+      bump = max(bump, sp.y); groove = max(groove, sp.z);
+      if (u_invOn > 0.5 && u_inv.x < 0.5 && abs(u_inv.y - u_sz[i]) < 0.01) {
+        float inside = smoothstep(u_inv.z - 0.05, u_inv.z + 0.02, P.x) * (1.0 - smoothstep(u_inv.w - 0.02, u_inv.w + 0.05, P.x));
+        isInv = max(isInv, inside * (1.0 - smoothstep(0.025, 0.07, abs(t))));
+      }
+    }
+  }
+  for (int i = 0; i < 5; i++) {
+    float t = P.x - u_sx[i];
+    float isB = (i == 1 || i == 3) ? 1.0 : 0.0;
+    if (abs(t) < 0.07) {
+      vec3 sp = seamPattern(t, P.z, isB, aa);
+      if (sp.x > stitch) stitch = sp.x;
+      bump = max(bump, sp.y); groove = max(groove, sp.z);
+      if (isB > 0.5) {
+        float lk = (i == 1) ? u_link.x : u_link.y;
+        tension = max(tension, lk * (1.0 - smoothstep(0.0, 0.05, abs(t))));
+      }
+      if (u_invOn > 0.5 && u_inv.x > 0.5 && abs(u_inv.y - u_sx[i]) < 0.01) {
+        float inside = smoothstep(u_inv.z - 0.05, u_inv.z + 0.02, P.z) * (1.0 - smoothstep(u_inv.w - 0.02, u_inv.w + 0.05, P.z));
+        isInv = max(isInv, inside * (1.0 - smoothstep(0.02, 0.06, abs(t))));
+      }
+    }
+  }
+  // finger / trail tension (threads tighten where pressed)
+  float press = 0.0;
+  if (u_finger.w > 0.5) press = 1.0 - smoothstep(u_finger.z * 0.5, u_finger.z * 1.6, length(P.xz - u_finger.xy));
+  for (int i = 0; i < 10; i++) {
+    vec4 tr = u_trail[i];
+    if (tr.z <= 0.0) continue;
+    press = max(press, tr.z * (1.0 - smoothstep(0.03, 0.16, length(P.xz - tr.xy))));
+  }
+  // ---- fabric colour ----
+  vec3 blue = vec3(0.030, 0.088, 0.60);
+  float dent = clamp(v_strain * 0.5, -1.0, 1.0); // + = concave (dent)
+  vec3 col = blue * weaveShade;
+  col *= 1.0 - clamp(dent, 0.0, 1.0) * 0.22;          // compressed / occluded
+  col += blue * clamp(-dent, 0.0, 1.0) * 0.12;         // stretched over a bulge lighter
+  col *= 1.0 - groove * 0.45;
+  col *= 1.0 + bump * 0.12;
+  // stitches (thick off-white thread)
+  vec3 thread = vec3(0.70, 0.72, 0.70);
+  float pulse = 0.5 + 0.5 * sin(u_time * 7.0);
+  float invGlow = isInv * (0.35 + 0.65 * pulse);
+  thread = mix(thread, vec3(1.25, 1.12, 0.78), clamp(invGlow * 1.0 + press * 0.8 + tension * 0.6, 0.0, 1.0));
+  col = mix(col, thread * (0.85 + 0.25 * bump), max(stitch, invGlow * 0.35 * (1.0 - groove)));
+  // soft warm light pooling on the invited seam (stepping cue)
+  col += vec3(0.42, 0.36, 0.16) * invGlow * 0.16;
+  col += vec3(0.12, 0.16, 0.30) * tension * 0.10;
+  // ---- lighting ----
+  vec3 Nl = normalize(Nw + vec3(0.0, 0.0, 0.0));
+  float sh = texture2D(u_shw, shwUV(P.xz)).r;
+  float ndl = max(dot(Nl, LK), 0.0);
+  vec3 amb = mix(vec3(0.16, 0.18, 0.24), SKY, Nl.y * 0.5 + 0.5);
+  vec3 lit = col * (amb * 0.9 + CKEY * (0.15 + 0.85 * ndl) * sh);
+  // sheen + glossy tube reflections (woven polypropylene)
+  float nv = max(dot(Nl, Vd), 0.0);
+  float sheen = pow(1.0 - nv, 4.0) * 0.22;
+  vec3 R = reflect(-Vd, Nl);
+  float tb = tubes(P, R, 0.45);
+  float hl = pow(max(dot(R, LK), 0.0), 24.0);
+  lit += vec3(0.30, 0.38, 0.62) * sheen * sh;
+  lit += (tb * 0.035 + hl * 0.05) * sh * vec3(0.9, 0.95, 1.05) * (1.0 + stitch * 2.0);
+  // under-edge darkening near pads
+  float edge = min(u_sheetH.x - abs(P.x), u_sheetH.y - abs(P.z));
+  lit *= 0.7 + 0.3 * smoothstep(0.0, 0.18, edge);
+  gl_FragColor = vec4(tonemap(fog(lit, P)), 1.0);
+}
+`;
+
+// ---------------- characters, balls, ribbon ----------------
+const VS_BODY = `
+attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec2 a_uv; attribute vec3 a_ext;
+uniform mat4 u_vp; uniform mat4 u_model; uniform mat3 u_nmat; uniform vec3 u_cap;
+varying vec3 v_wp; varying vec3 v_n; varying vec2 v_uv; varying vec3 v_on;
+void main(){
+  vec3 p = a_pos; vec3 n = a_nrm;
+  if (u_cap.z > 0.0) {
+    float side = a_ext.x;
+    float r = mix(u_cap.x, u_cap.y, side * 0.5 + 0.5);
+    p = a_nrm * r + vec3(0.0, side * u_cap.z, 0.0);
+  }
+  vec4 w = u_model * vec4(p, 1.0);
+  v_wp = w.xyz; v_n = normalize(u_nmat * n); v_uv = a_uv; v_on = a_nrm;
+  gl_Position = u_vp * w;
+}
+`;
+const FS_BODY = GLSL_COMMON + `
+varying vec3 v_wp; varying vec3 v_n; varying vec2 v_uv; varying vec3 v_on;
+uniform vec3 u_color; uniform vec3 u_color2;
+uniform float u_kind; uniform float u_texOn; uniform sampler2D u_tex;
+uniform vec3 u_gnd; uniform float u_emit; uniform float u_shadowOn;
+void main(){
+  vec3 N = normalize(v_n);
+  if (!gl_FrontFacing) N = -N;
+  vec3 P = v_wp;
+  vec3 Vd = normalize(u_eye - P);
+  vec3 base = u_color;
+  float k = floor(u_kind + 0.5);
+  float spec = 0.04; float shin = 30.0; float wrap = 0.0; float sheenAmt = 0.0; float blur = 0.3;
+  vec3 sss = vec3(0.0);
+  if (k < 0.5) { // skin
+    if (u_texOn > 0.5) { vec4 t = texture2D(u_tex, v_uv); base = mix(base, t.rgb, t.a); }
+    wrap = 0.45; sss = vec3(0.10, 0.025, 0.012); spec = 0.05; shin = 24.0;
+  } else if (k < 1.5) { // clothes
+    float kn = vnoise(v_uv * vec2(140.0, 140.0));
+    base *= 0.92 + 0.12 * kn; wrap = 0.25; sheenAmt = 0.22; spec = 0.015; shin = 8.0;
+  } else if (k < 2.5) { // hair
+    wrap = 0.2; spec = 0.0;
+  } else if (k < 3.5) { // eye: object-space normal vs +z
+    float a = dot(normalize(v_on), vec3(0.0, 0.0, 1.0));
+    float iris = smoothstep(0.80, 0.83, a);
+    float pupil = smoothstep(0.93, 0.945, a);
+    float ring = smoothstep(0.86, 0.80, a) * iris;
+    base = mix(vec3(0.82, 0.80, 0.78), u_color * (0.75 + 0.5 * a), iris);
+    base = mix(base, vec3(0.012), pupil);
+    base *= 1.0 - ring * 0.5;
+    spec = 0.9; shin = 200.0; wrap = 0.3;
+  } else if (k < 4.5) { // vinyl ball
+    spec = 0.5; shin = 90.0; blur = 0.04; wrap = 0.1;
+    float seam = 1.0 - smoothstep(0.0, 0.03, abs(v_on.y));
+    base *= 1.0 - seam * 0.25;
+  } else if (k < 5.5) { // satin ribbon
+    spec = 0.6; shin = 40.0; sheenAmt = 0.5; blur = 0.12; wrap = 0.3;
+  } else if (k < 6.5) { // socks / knit
+    base *= 0.9 + 0.12 * vnoise(v_uv * 90.0); wrap = 0.3; sheenAmt = 0.3; spec = 0.01;
+  } else { // plain
+    spec = 0.2; shin = 40.0;
+  }
+  float sh = 1.0;
+  float ndl = dot(N, LK);
+  float diff = max((ndl + wrap) / (1.0 + wrap), 0.0);
+  vec3 amb = mix(u_gnd, SKY, N.y * 0.5 + 0.5);
+  vec3 col = base * (amb * 0.92 + CKEY * diff * 0.95 * sh);
+  col += sss * smoothstep(-0.3, 0.4, ndl) * (1.0 - max(ndl, 0.0));
+  vec3 H = normalize(LK + Vd);
+  float nv = max(dot(N, Vd), 0.0);
+  float fres = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+  col += CKEY * pow(max(dot(N, H), 0.0), shin) * spec * sh;
+  vec3 R = reflect(-Vd, N);
+  col += tubes(P, R, blur) * spec * (0.25 + fres) * 0.9 * vec3(0.95, 1.0, 1.08);
+  if (k > 1.5 && k < 2.5) { // anisotropic hair highlight band
+    vec3 T = normalize(cross(N, vec3(1.0, 0.0, 0.0)) + vec3(0.0, 0.0001, 0.0));
+    float th = dot(T, H);
+    float an = pow(sqrt(max(1.0 - th * th, 0.0)), 60.0);
+    col += u_color2 * an * 0.35 * sh + base * pow(1.0 - nv, 3.0) * 0.4;
+  }
+  if (k > 4.5 && k < 5.5) { // satin anisotropic sheen along ribbon length
+    vec3 T = vec3(0.0, 1.0, 0.0);
+    float th = dot(T, H);
+    col += base * pow(sqrt(max(1.0 - th * th, 0.0)), 24.0) * 0.9;
+  }
+  col += base * pow(1.0 - nv, 3.0) * sheenAmt * 0.6 * vec3(0.8, 0.9, 1.1);
+  col += u_color * u_emit;
+  gl_FragColor = vec4(tonemap(fog(col, P)), 1.0);
+}
+`;
+
+// ---------------- particles (fibre lint, sparkles) ----------------
+const VS_PART = `
+attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec2 a_uv; attribute vec3 a_ext;
+uniform mat4 u_vp; uniform float u_px;
+varying vec3 v_col; varying float v_a;
+void main(){
+  vec4 c = u_vp * vec4(a_pos, 1.0);
+  gl_Position = c;
+  gl_PointSize = clamp(a_ext.x * u_px / c.w, 1.0, 64.0);
+  v_col = a_nrm; v_a = a_ext.y;
+}
+`;
+const FS_PART = `
+varying vec3 v_col; varying float v_a;
+void main(){
+  vec2 q = gl_PointCoord * 2.0 - 1.0;
+  float d = dot(q, q);
+  if (d > 1.0) discard;
+  float a = (1.0 - d) * (1.0 - d) * v_a;
+  gl_FragColor = vec4(v_col * a, a);
+}
+`;
+
+// ---------------- shadow bake (top-down, low-res) ----------------
+const VS_SHWQ = `
+attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec2 a_uv; attribute vec3 a_ext;
+uniform vec4 u_shwR;
+varying vec2 v_xz;
+void main(){ v_xz = vec2(u_shwR.x + a_uv.x / u_shwR.z, u_shwR.y + a_uv.y / u_shwR.w); gl_Position = vec4(a_uv * 2.0 - 1.0, 0.0, 1.0); }
+`;
+const FS_SHWQ = GLSL_COMMON + `
+varying vec2 v_xz;
+uniform float u_floorY;
+void main(){ gl_FragColor = vec4(occShadow(vec3(v_xz.x, 0.07, v_xz.y)), occShadow(vec3(v_xz.x, u_floorY, v_xz.y)), 1.0, 1.0); }
+`;
+const VS_SHWC = `
+attribute vec2 a_xz; attribute vec4 a_h;
+uniform vec4 u_shwR;
+varying vec3 v_wp;
+void main(){ v_wp = vec3(a_xz.x, a_h.x, a_xz.y); vec2 uv = vec2((a_xz.x - u_shwR.x) * u_shwR.z, (a_xz.y - u_shwR.y) * u_shwR.w); gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0); }
+`;
+const FS_SHWC = GLSL_COMMON + `
+varying vec3 v_wp;
+void main(){ gl_FragColor = vec4(occShadow(v_wp), 0.0, 0.0, 1.0); }
+`;
+// ---------------------------------------------------------------------------
+// AudioFX: fully synthesized Web Audio effects (no files, no samples, no network).
+// Every public method is wrapped in try/catch and is a silent no-op before
+// unlock() or when Web Audio is unavailable. Inputs are clamped (0..1, pan -1..1).
+// Chain: voices / loops -> bus -> DynamicsCompressor -> master(0.55) -> out.
+// Key centre: F major (warm, calm). Rubbing = filtered noise; successes = bells.
+// ---------------------------------------------------------------------------
+const AudioFX = (function () {
+  'use strict';
+
+  var MAX_VOICES = 12;
+  var MASTER_GAIN = 0.55;
+  var LOOP_IDLE_MS = 2200; // continuous loops are torn down after this much silence
+
+  var ctx = null, bus = null, master = null, noiseBuf = null;
+  var hasPanner = false;
+  var userSuspended = false;
+  var silentDone = false;
+  var unlockAt = -1e9;
+  var lastResumeTry = -1e9;
+  var voices = [];
+  var lastPlay = {};
+  var rub = null, roll = null;
+
+  function noop() {}
+  function report(e) { /* deliberately silent: audio must never break the game */ }
+  function safe(fn) {
+    return function () {
+      try { return fn.apply(null, arguments); } catch (e) { report(e); return undefined; }
+    };
+  }
+  function clamp(v, lo, hi, def) {
+    v = +v;
+    if (!isFinite(v)) v = def;
+    return v < lo ? lo : (v > hi ? hi : v);
+  }
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function nowMs() {
+    try {
+      if (typeof performance !== 'undefined' && performance && performance.now) return performance.now();
+    } catch (e) { /* ignore */ }
+    return Date.now();
+  }
+  function quiet(p) { if (p && p.then && p.catch) p.catch(noop); }
+
+  // ---- context / master chain ---------------------------------------------
+  function build() {
+    var AC = null;
+    if (typeof window !== 'undefined' && window) AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    var c = null;
+    try { c = new AC({ latencyHint: 'interactive' }); } catch (e) { c = null; }
+    if (!c) c = new AC();
+    if (!c) return false;
+    var b = c.createGain(); b.gain.value = 1;
+    var k = null;
+    try {
+      k = c.createDynamicsCompressor();
+      k.threshold.value = -12; k.knee.value = 10; k.ratio.value = 5;
+      k.attack.value = 0.003; k.release.value = 0.25;
+    } catch (e) { k = null; }
+    var m = c.createGain(); m.gain.value = MASTER_GAIN;
+    if (k) { b.connect(k); k.connect(m); } else { b.connect(m); }
+    m.connect(c.destination);
+    // one shared 2 s white-noise buffer, reused by every noise voice and loop
+    var sr = c.sampleRate || 44100;
+    var len = Math.floor(sr * 2);
+    var nb = c.createBuffer(1, len, sr);
+    var d = nb.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    ctx = c; bus = b; master = m; noiseBuf = nb;
+    hasPanner = typeof c.createStereoPanner === 'function';
+    return true;
+  }
+
+  function ready() {
+    if (!ctx || !bus || !noiseBuf || userSuspended) return false;
+    var st = ctx.state;
+    if (st === 'running' || st === undefined) return true;
+    if (st === 'closed') return false;
+    var n = nowMs();
+    if (n - lastResumeTry > 800) {
+      lastResumeTry = n;
+      try { if (ctx.resume) quiet(ctx.resume()); } catch (e) { /* ignore */ }
+    }
+    // short grace window right after unlock while resume() is still pending
+    return (n - unlockAt) < 1000;
+  }
+
+  // ---- one-shot voice management -----------------------------------------
+  function release(v) {
+    if (v.done) return;
+    v.done = true;
+    var i;
+    for (i = 0; i < v.srcs.length; i++) { try { v.srcs[i].onended = null; } catch (e) { /* ignore */ } }
+    for (i = 0; i < v.nodes.length; i++) { try { v.nodes[i].disconnect(); } catch (e) { /* ignore */ } }
+    v.nodes.length = 0; v.srcs.length = 0; v.stops.length = 0;
+    var k = voices.indexOf(v);
+    if (k >= 0) voices.splice(k, 1);
+  }
+  function kill(v, now) {
+    if (v.done || v.stolen) return;
+    v.stolen = true;
+    try {
+      v.out.gain.cancelScheduledValues(now);
+      v.out.gain.setValueAtTime(1, now);
+      v.out.gain.linearRampToValueAtTime(0, now + 0.04);
+    } catch (e) { /* ignore */ }
+    for (var i = 0; i < v.srcs.length; i++) {
+      if (v.stops[i] > now + 0.05) { try { v.srcs[i].stop(now + 0.05); } catch (e) { /* ignore */ } }
+    }
+    v.end = now + 0.06;
+  }
+  function sweep(now) {
+    for (var i = voices.length - 1; i >= 0; i--) {
+      if (now > voices[i].end + 1.0) release(voices[i]);
+    }
+  }
+  // Allocate a voice (null = drop). gap = per-sound minimum retrigger interval.
+  function voice(name, dur, prio, pan, gap) {
+    if (!ready()) return null;
+    var now = ctx.currentTime;
+    var lp = lastPlay[name];
+    if (lp !== undefined && now >= lp && now - lp < gap) return null;
+    sweep(now);
+    var live = 0, victim = null, i, c;
+    for (i = 0; i < voices.length; i++) {
+      c = voices[i];
+      if (c.stolen) continue;
+      live++;
+      if (c.prio <= prio && (!victim || c.prio < victim.prio || (c.prio === victim.prio && c.t < victim.t))) victim = c;
+    }
+    if (live >= MAX_VOICES) {
+      if (!victim) return null;
+      kill(victim, now);
+    }
+    lastPlay[name] = now;
+    var t = now + 0.01;
+    var out = ctx.createGain(); out.gain.value = 1;
+    var v = { t: t, end: t + dur, prio: prio, out: out, nodes: [out], srcs: [], stops: [], live: 0, done: false, stolen: false };
+    if (pan && hasPanner) {
+      var p = ctx.createStereoPanner();
+      p.pan.value = clamp(pan, -1, 1, 0);
+      out.connect(p); p.connect(bus); v.nodes.push(p);
+    } else {
+      out.connect(bus);
+    }
+    voices.push(v);
+    return v;
+  }
+  function play(v, src, t0, t1, offset) {
+    v.srcs.push(src); v.stops.push(t1); v.nodes.push(src);
+    v.live++;
+    if (t1 > v.end) v.end = t1;
+    src.onended = function () { v.live--; if (v.live <= 0) release(v); };
+    if (offset !== undefined) src.start(t0, offset); else src.start(t0);
+    src.stop(t1);
+  }
+  function G(v, val) { var g = ctx.createGain(); g.gain.value = val; v.nodes.push(g); return g; }
+  function F(v, type, f, q) {
+    var b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f;
+    if (q !== undefined) b.Q.value = q;
+    v.nodes.push(b); return b;
+  }
+  function O(type, f) { var o = ctx.createOscillator(); o.type = type; o.frequency.value = f; return o; }
+  function N() { var s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; return s; }
+  function pan2(v, p) {
+    if (!hasPanner) return v.out;
+    var n = ctx.createStereoPanner(); n.pan.value = p; n.connect(v.out); v.nodes.push(n); return n;
+  }
+  // percussive envelope: tiny linear attack, exponential decay
+  function env(p, t, a, peak, d) {
+    peak = Math.max(0.0002, peak); a = Math.max(0.001, a); d = Math.max(0.01, d);
+    p.setValueAtTime(0.0001, t);
+    p.linearRampToValueAtTime(peak, t + a);
+    p.exponentialRampToValueAtTime(0.0001, t + a + d);
+    p.linearRampToValueAtTime(0, t + a + d + 0.02);
+  }
+  // attack, ease down to a held level, then exponential tail to t1
+  function envHold(p, t, a, peak, tHold, holdLv, t1) {
+    peak = Math.max(0.0002, peak); holdLv = Math.max(0.0002, holdLv);
+    p.setValueAtTime(0.0001, t);
+    p.linearRampToValueAtTime(peak, t + a);
+    p.linearRampToValueAtTime(holdLv, Math.max(t + a + 0.005, tHold));
+    p.exponentialRampToValueAtTime(0.0001, Math.max(tHold + 0.02, t1));
+    p.linearRampToValueAtTime(0, Math.max(tHold + 0.02, t1) + 0.02);
+  }
+  function glide(p, t, f0, f1, dt) {
+    p.setValueAtTime(f0, t);
+    if (f1 > 0 && f1 !== f0) p.exponentialRampToValueAtTime(f1, t + Math.max(0.004, dt));
+  }
+  function tone(v, dest, type, t, f0, f1, gl, a, d, amp) {
+    var o = O(type, f0); glide(o.frequency, t, f0, f1, gl);
+    var g = G(v, 0); env(g.gain, t, a, amp, d);
+    o.connect(g); g.connect(dest);
+    play(v, o, t, t + a + d + 0.04);
+    return o;
+  }
+  function hiss(v, dest, t, a, d, amp, type, f0, f1, gl, q) {
+    var s = N();
+    var f = F(v, type, f0, q); glide(f.frequency, t, f0, f1, gl);
+    var g = G(v, 0); env(g.gain, t, a, amp, d);
+    s.connect(f); f.connect(g); g.connect(dest);
+    play(v, s, t, t + a + d + 0.04, Math.random() * 1.5);
+    return f;
+  }
+
+  // ---- continuous loops (rub, roll) ---------------------------------------
+  function startLoop(c) {
+    var t = ctx.currentTime;
+    for (var i = 0; i < c.srcs.length; i++) {
+      var s = c.srcs[i];
+      if (s.buffer) s.start(t, Math.random() * 1.5); else s.start(t);
+    }
+  }
+  function stopLoop(c) {
+    if (!c || c.dead) return;
+    c.dead = true;
+    if (c.timer) { try { clearTimeout(c.timer); } catch (e) { /* ignore */ } c.timer = null; }
+    var t = 0, i;
+    try { t = ctx.currentTime; } catch (e) { t = 0; }
+    for (i = 0; i < c.gains.length; i++) {
+      try { c.gains[i].gain.cancelScheduledValues(t); c.gains[i].gain.setValueAtTime(0, t); } catch (e) { /* ignore */ }
+    }
+    for (i = 0; i < c.srcs.length; i++) { try { c.srcs[i].stop(t + 0.03); } catch (e) { /* ignore */ } }
+    for (i = 0; i < c.nodes.length; i++) { try { c.nodes[i].disconnect(); } catch (e) { /* ignore */ } }
+  }
+  function killRub() { if (rub) { stopLoop(rub); rub = null; } }
+  function killRoll() { if (roll) { stopLoop(roll); roll = null; } }
+  // single low-rate JS watchdog per loop: frees the nodes after LOOP_IDLE_MS
+  // without an active call (covers callers that never send an "off" call).
+  function armWatch(c, killer) {
+    if (c.timer || c.dead) return;
+    var check = function () {
+      try {
+        c.timer = null;
+        if (c.dead) return;
+        if (nowMs() - c.lastCallMs > LOOP_IDLE_MS) { killer(); return; }
+        c.timer = setTimeout(check, 700);
+      } catch (e) { report(e); }
+    };
+    c.timer = setTimeout(check, 700);
+  }
+  // Re-target a param and pre-schedule a fade to `tail` after `hold` seconds.
+  // Each update cancels the pending fade, so while the caller keeps updating
+  // the sound continues; if the calls stop, the audio thread fades it out.
+  function steer(p, t, val, tc, hold, tail, tailTc) {
+    p.cancelScheduledValues(t);
+    p.setTargetAtTime(val, t, tc);
+    if (hold > 0) p.setTargetAtTime(tail, t + hold, tailTc);
+  }
+  function fadeOut(p, t, tc) { p.cancelScheduledValues(t); p.setTargetAtTime(0, t, tc); }
+
+  function makeRub() {
+    var c = { srcs: [], nodes: [], gains: [], lastUpd: -1, lastG: -1, lastF: -1, lastH: -1, lastCallMs: nowMs(), active: false, timer: null, dead: false };
+    var src = N();
+    var bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 400; bp.Q.value = 1;
+    var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1200; lp.Q.value = 0;
+    var am = ctx.createGain(); am.gain.value = 0.72;        // grain / weave texture
+    var l1 = O('sine', 7), l2 = O('triangle', 4.3);
+    var lg1 = ctx.createGain(); lg1.gain.value = 0.14;
+    var lg2 = ctx.createGain(); lg2.gain.value = 0.09;
+    var g = ctx.createGain(); g.gain.value = 0;
+    src.connect(bp); bp.connect(lp); lp.connect(am); am.connect(g); g.connect(bus);
+    l1.connect(lg1); lg1.connect(am.gain); l2.connect(lg2); lg2.connect(am.gain);
+    // soft tension hum (sine + quiet octave so it is audible on small speakers)
+    var h1 = O('sine', 210), h2 = O('sine', 420);
+    var h2g = ctx.createGain(); h2g.gain.value = 0.3;
+    var hg = ctx.createGain(); hg.gain.value = 0;
+    h1.connect(hg); h2.connect(h2g); h2g.connect(hg); hg.connect(bus);
+    c.srcs.push(src, l1, l2, h1, h2);
+    c.nodes.push(src, bp, lp, am, l1, l2, lg1, lg2, g, h1, h2, h2g, hg);
+    c.gains.push(g, hg);
+    c.bp = bp; c.lp = lp; c.l1 = l1; c.lg1 = lg1; c.g = g; c.h1 = h1; c.h2 = h2; c.hg = hg;
+    startLoop(c);
+    return c;
+  }
+
+  function makeRoll() {
+    var c = { srcs: [], nodes: [], gains: [], lastUpd: -1, lastG: -1, lastF: -1, lastCallMs: nowMs(), active: false, timer: null, dead: false };
+    var src = N();
+    var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200; lp.Q.value = 0.5;
+    var bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 2.2;
+    var bpg = ctx.createGain(); bpg.gain.value = 0.9;
+    var am = ctx.createGain(); am.gain.value = 0.7;
+    var l1 = O('sine', 6);
+    var lg = ctx.createGain(); lg.gain.value = 0.28;
+    var g = ctx.createGain(); g.gain.value = 0;
+    src.connect(lp); lp.connect(am);
+    src.connect(bp); bp.connect(bpg); bpg.connect(am);
+    am.connect(g); g.connect(bus);
+    l1.connect(lg); lg.connect(am.gain);
+    c.srcs.push(src, l1);
+    c.nodes.push(src, lp, bp, bpg, am, l1, lg, g);
+    c.gains.push(g);
+    c.lp = lp; c.bp = bp; c.l1 = l1; c.g = g;
+    startLoop(c);
+    return c;
+  }
+
+  // ---- public: lifecycle --------------------------------------------------
+  function unlock() {
+    if (!ctx && !build()) return false;
+    userSuspended = false;
+    var st = ctx.state;
+    if (st !== 'running' || !silentDone) {
+      unlockAt = nowMs();
+      lastResumeTry = unlockAt;
+      try { if (ctx.resume) quiet(ctx.resume()); } catch (e) { /* ignore */ }
+      try {
+        // iOS: a 1-sample silent buffer started inside the gesture unmutes output
+        var b = ctx.createBuffer(1, 1, 22050);
+        var s = ctx.createBufferSource();
+        s.buffer = b; s.connect(ctx.destination);
+        s.onended = function () { try { s.disconnect(); } catch (e) { /* ignore */ } };
+        s.start(0);
+        silentDone = true;
+      } catch (e) { /* ignore */ }
+    }
+    return true;
+  }
+
+  function suspend() {
+    if (!ctx) return;
+    userSuspended = true;
+    killRub(); killRoll();
+    var now = ctx.currentTime;
+    for (var i = voices.length - 1; i >= 0; i--) { kill(voices[i], now); release(voices[i]); }
+    voices.length = 0;
+    if (ctx.suspend) quiet(ctx.suspend());
+  }
+
+  function resume() {
+    if (!ctx) return;
+    userSuspended = false;
+    lastResumeTry = nowMs();
+    if (ctx.resume) quiet(ctx.resume());
+  }
+
+  // ---- public: continuous -------------------------------------------------
+  function setRub(active, depth, speed) {
+    if (!ctx) return;
+    var t;
+    if (!active) {
+      if (rub && rub.active) {
+        rub.active = false;
+        t = ctx.currentTime;
+        fadeOut(rub.g.gain, t, 0.06);
+        fadeOut(rub.hg.gain, t, 0.09);
+      }
+      return;
+    }
+    if (!ready()) return;
+    var d = clamp(depth, 0, 1, 0), s = clamp(speed, 0, 1, 0);
+    if (!rub) rub = makeRub();
+    var c = rub;
+    c.lastCallMs = nowMs();
+    armWatch(c, killRub);
+    t = ctx.currentTime;
+    // band centre rises with speed, deeper press = lower and more "tense" (higher Q)
+    var fc = (300 + 1300 * Math.pow(s, 0.85)) * (1 - 0.38 * d);
+    if (fc < 160) fc = 160;
+    var q = 0.8 + 1.8 * d;
+    // loudness mostly from speed; compensate for band width so lows are not lost
+    // (and for the narrower band at higher Q)
+    var gn = (0.03 + 0.78 * Math.pow(s, 0.7)) * Math.sqrt(700 / fc) * Math.sqrt(q / 0.8) * 0.85;
+    if (gn > 1.2) gn = 1.2;
+    var hf = 210 - 80 * d;
+    var hgn = d > 0.04 ? 0.065 * Math.pow(d, 1.2) : 0;
+    var since = t - c.lastUpd;
+    var changed = !c.active || since > 0.08 ||
+      (since > 0.025 && (Math.abs(gn - c.lastG) > 0.03 || Math.abs(fc - c.lastF) > fc * 0.05 || Math.abs(hgn - c.lastH) > 0.006));
+    if (!changed) return;
+    c.active = true; c.lastUpd = t; c.lastG = gn; c.lastF = fc; c.lastH = hgn;
+    steer(c.g.gain, t, gn, 0.045, 0.3, 0, 0.08);
+    steer(c.hg.gain, t, hgn, 0.09, 0.3, 0, 0.1);
+    steer(c.bp.frequency, t, fc, 0.05, 0, 0, 0);
+    steer(c.bp.Q, t, q, 0.12, 0, 0, 0);
+    steer(c.lp.frequency, t, fc * 2.6, 0.05, 0, 0, 0);
+    steer(c.l1.frequency, t, 6 + 12 * s, 0.1, 0, 0, 0);
+    steer(c.lg1.gain, t, 0.1 + 0.16 * s, 0.1, 0, 0, 0);
+    steer(c.h1.frequency, t, hf, 0.12, 0, 0, 0);
+    steer(c.h2.frequency, t, hf * 2, 0.12, 0, 0, 0);
+  }
+
+  function setRoll(speed) {
+    if (!ctx) return;
+    var s = clamp(speed, 0, 1, 0), t;
+    if (s < 0.01) {
+      if (roll && roll.active) {
+        roll.active = false;
+        t = ctx.currentTime;
+        fadeOut(roll.g.gain, t, 0.12);
+      }
+      return;
+    }
+    if (!ready()) return;
+    if (!roll) roll = makeRoll();
+    var c = roll;
+    c.lastCallMs = nowMs();
+    armWatch(c, killRoll);
+    t = ctx.currentTime;
+    var gn = 0.85 * Math.pow(s, 0.8);
+    var fc = 150 + 420 * s;
+    var since = t - c.lastUpd;
+    var changed = !c.active || since > 0.1 ||
+      (since > 0.03 && (Math.abs(gn - c.lastG) > 0.03 || Math.abs(fc - c.lastF) > fc * 0.06));
+    if (!changed) return;
+    c.active = true; c.lastUpd = t; c.lastG = gn; c.lastF = fc;
+    steer(c.g.gain, t, gn, 0.12, 0.35, 0, 0.12);
+    steer(c.lp.frequency, t, fc, 0.15, 0, 0, 0);
+    steer(c.bp.frequency, t, 190 + 170 * s, 0.15, 0, 0, 0);
+    steer(c.l1.frequency, t, 4 + 14 * s, 0.2, 0, 0, 0);
+  }
+
+  // ---- public: one-shots --------------------------------------------------
+  function boing(depth, height) {
+    var d = clamp(depth, 0, 1, 0.5), h = clamp(height, 0, 1, 0.5);
+    var gl = 0.13 + 0.22 * d + 0.1 * h;          // deeper = longer glide
+    var dur = gl + 0.16 + 0.14 * h;
+    var v = voice('boing', dur, 2, 0, 0.03); if (!v) return;
+    var t = v.t, end = t + dur + 0.05;
+    var f0 = 250 - 110 * d, f1 = f0 * (1.9 + 1.1 * h); // deeper = lower start
+    var amp = 0.11 + 0.12 * h;
+    var g = G(v, 0); envHold(g.gain, t, 0.008, amp, t + gl, amp * 0.7, t + dur); g.connect(v.out);
+    var o1 = O('sine', f0); glide(o1.frequency, t, f0, f1, gl); o1.connect(g);
+    var o2g = G(v, 0.2); o2g.connect(g);
+    var o2 = O('triangle', f0 * 2); glide(o2.frequency, t, f0 * 2, f1 * 2, gl); o2.connect(o2g);
+    var lfo = O('sine', 10 + 5 * h);              // springy wobble on the pitch
+    var lg = G(v, 0);
+    lg.gain.setValueAtTime(f0 * 0.07, t);
+    lg.gain.exponentialRampToValueAtTime(f0 * 0.004, t + dur);
+    lfo.connect(lg); lg.connect(o1.frequency); lg.connect(o2.frequency);
+    play(v, o1, t, end); play(v, o2, t, end); play(v, lfo, t, end);
+    hiss(v, v.out, t, 0.004, 0.06 + 0.04 * h, 0.18 + 0.2 * h, 'bandpass', 1500, 700, 0.08, 1.1); // fabric release
+  }
+
+  function seatBoing(hgt) {
+    var h = clamp(hgt, 0, 1, 0.5);
+    var gl = 0.1 + 0.08 * h;
+    var dur = gl + 0.12 + 0.06 * h;
+    var v = voice('seat', dur, 2, 0, 0.03); if (!v) return;
+    var t = v.t, end = t + dur + 0.05;
+    var f0 = 290 - 20 * h, f1 = f0 * (1.45 + 0.5 * h);
+    var amp = 0.08 + 0.07 * h;
+    var g = G(v, 0); envHold(g.gain, t, 0.012, amp, t + gl, amp * 0.6, t + dur); g.connect(v.out);
+    var o = O('sine', f0); glide(o.frequency, t, f0, f1, gl); o.connect(g);
+    var o2g = G(v, 0.1); o2g.connect(g);
+    var o2 = O('sine', f0 * 2); glide(o2.frequency, t, f0 * 2, f1 * 2, gl); o2.connect(o2g);
+    var lfo = O('sine', 9);
+    var lg = G(v, 0);
+    lg.gain.setValueAtTime(f0 * 0.035, t);
+    lg.gain.exponentialRampToValueAtTime(f0 * 0.003, t + dur);
+    lfo.connect(lg); lg.connect(o.frequency);
+    play(v, o, t, end); play(v, o2, t, end); play(v, lfo, t, end);
+    hiss(v, v.out, t, 0.004, 0.05, 0.12 + 0.08 * h, 'lowpass', 900, 500, 0.05, 0.3);
+  }
+
+  function thud(energy) {
+    var e = clamp(energy, 0, 1, 0.5);
+    var dur = 0.2 + 0.22 * e;
+    var v = voice('thud', dur, 1, 0, 0.04); if (!v) return;
+    var t = v.t;
+    var f0 = 92 + 18 * e, f1 = 56 + 4 * e;
+    tone(v, v.out, 'sine', t, f0, f1, 0.1 + 0.08 * e, 0.004, dur, 0.16 + 0.2 * e);
+    tone(v, v.out, 'triangle', t, f0 * 2.3, f1 * 2.1, 0.08, 0.003, 0.08 + 0.05 * e, 0.04 + 0.06 * e); // body for small speakers
+    hiss(v, v.out, t, 0.003, 0.06 + 0.07 * e, 0.45 + 0.6 * e, 'lowpass', 520 + 700 * e, 160, 0.12, 0.5);
+  }
+
+  function softLand() {
+    var v = voice('soft', 1.0, 2, 0, 0.08); if (!v) return;
+    var t = v.t;
+    hiss(v, v.out, t, 0.04, 0.42, 0.8, 'lowpass', 750, 170, 0.4, 0.3);       // fwump
+    tone(v, v.out, 'sine', t, 150, 78, 0.3, 0.025, 0.35, 0.12);
+    var warm = F(v, 'lowpass', 1500, 0.2); warm.connect(v.out);
+    tone(v, warm, 'triangle', t + 0.05, 440, 349.23, 0.55, 0.07, 0.8, 0.06);   // A4 -> F4
+    tone(v, warm, 'sine', t + 0.05, 220, 174.61, 0.55, 0.08, 0.75, 0.035);
+  }
+
+  function ribbon() {
+    var v = voice('ribbon', 2.3, 3, 0, 0.25); if (!v) return;
+    var t = v.t, i, k;
+    var bell = G(v, 1); bell.connect(v.out);
+    var notes = [698.46, 880.0, 1046.5, 1396.91];       // F5 A5 C6 F6
+    var ratios = [1, 2.756, 5.404], amps = [1, 0.42, 0.2], decs = [1.9, 0.8, 0.35];
+    for (i = 0; i < notes.length; i++) {
+      var tn = t + i * 0.012;                            // tiny strum
+      for (k = 0; k < ratios.length; k++) {
+        var f = notes[i] * ratios[k];
+        tone(v, bell, 'sine', tn, f, f, 0, 0.003, decs[k] * (1 - i * 0.08), 0.05 * amps[k]);
+      }
+    }
+    hiss(v, v.out, t, 0.002, 0.05, 0.12, 'highpass', 6000, 6000, 0, 0.5);    // strike glint
+    var arp = [1396.91, 1760, 2093, 2793.83, 3520];     // F6 A6 C7 F7 A7, rising
+    var pl = pan2(v, -0.5), pr = pan2(v, 0.5);
+    for (i = 0; i < arp.length; i++) {
+      var tj = t + 0.06 + i * 0.05, dst = (i % 2) ? pr : pl;
+      tone(v, dst, 'sine', tj, arp[i], arp[i] * 1.01, 0.03, 0.003, 0.32, 0.055);
+      tone(v, dst, 'triangle', tj, arp[i], arp[i], 0, 0.003, 0.12, 0.018);
+    }
+    tone(v, v.out, 'sine', t + 0.35, 4186.01, 4186.01, 0, 0.003, 0.5, 0.022);
+  }
+
+  function catchBall() {
+    var v = voice('catch', 0.8, 3, 0, 0.08); if (!v) return;
+    var t = v.t;
+    tone(v, v.out, 'sine', t, 560, 170, 0.06, 0.002, 0.09, 0.2);              // rubbery pop
+    tone(v, v.out, 'triangle', t, 900, 300, 0.05, 0.002, 0.05, 0.05);
+    hiss(v, v.out, t, 0.001, 0.025, 0.4, 'bandpass', 1800, 1200, 0.02, 1.5);
+    var ch = [1046.5, 1396.91];                                               // C6 -> F6
+    for (var k = 0; k < ch.length; k++) {
+      var tk = t + 0.07 + k * 0.1;
+      tone(v, v.out, 'sine', tk, ch[k], ch[k], 0, 0.003, 0.55, 0.085);
+      tone(v, v.out, 'sine', tk, ch[k] * 2.756, ch[k] * 2.756, 0, 0.003, 0.2, 0.02);
+    }
+  }
+
+  function pickBall() {
+    var v = voice('pick', 0.25, 1, 0, 0.05); if (!v) return;
+    var t = v.t;
+    tone(v, v.out, 'sine', t, 520, 830, 0.08, 0.008, 0.15, 0.085);
+    tone(v, v.out, 'sine', t, 1040, 1660, 0.08, 0.008, 0.08, 0.015);
+  }
+
+  function throwBall() {
+    var v = voice('throw', 0.32, 1, 0, 0.05); if (!v) return;
+    var t = v.t;
+    hiss(v, v.out, t, 0.06, 0.2, 0.6, 'bandpass', 600, 2400, 0.22, 0.9);
+    hiss(v, v.out, t + 0.02, 0.05, 0.15, 0.1, 'highpass', 3000, 5000, 0.18, 0.3);
+  }
+
+  function tick(pan) {
+    var p = clamp(pan, -1, 1, 0);
+    var v = voice('tick', 0.08, 0, p, 0.035); if (!v) return;
+    var t = v.t, f = 1150 * rnd(0.94, 1.06);
+    tone(v, v.out, 'sine', t, f, f * 0.8, 0.025, 0.001, 0.04, 0.05);
+    hiss(v, v.out, t, 0.001, 0.014, 0.2, 'bandpass', 2600, 2600, 0, 4);
+  }
+
+  function wobble() {
+    var v = voice('wobble', 0.45, 0, 0, 0.07); if (!v) return;
+    var t = v.t, end = t + 0.45, f = 340 * rnd(0.95, 1.05);
+    var o = O('sine', f); o.frequency.setValueAtTime(f, t);
+    var lfo = O('sine', 9);
+    var lg = G(v, 0);
+    lg.gain.setValueAtTime(f * 0.08, t);
+    lg.gain.exponentialRampToValueAtTime(f * 0.005, t + 0.4);
+    lfo.connect(lg); lg.connect(o.frequency);
+    var g = G(v, 0); env(g.gain, t, 0.015, 0.06, 0.38);
+    o.connect(g); g.connect(v.out);
+    play(v, o, t, end); play(v, lfo, t, end);
+  }
+
+  function linkOpen() {
+    var v = voice('link', 1.7, 2, 0, 0.3); if (!v) return;
+    var t = v.t;
+    var fs = [1174.66, 1396.91, 1760, 2093, 2637.02];  // D6 F6 A6 C7 E7
+    for (var i = 0; i < fs.length; i++) {
+      var ti = t + i * 0.07, f = fs[i];
+      tone(v, v.out, 'sine', ti, f, f, 0, 0.12, 1.1 - i * 0.08, 0.026);
+      tone(v, v.out, 'sine', ti, f + 4.5, f + 4.5, 0, 0.14, 1.0 - i * 0.08, 0.018); // slow beating shimmer
+    }
+    hiss(v, v.out, t, 0.3, 0.9, 0.18, 'bandpass', 2800, 6500, 0.9, 1.4);
+    var low = F(v, 'lowpass', 800, 0.2); low.connect(v.out);
+    tone(v, low, 'triangle', t, 174.61, 174.61, 0, 0.3, 0.9, 0.03);
+  }
+
+  function wave(energy) {
+    var e = clamp(energy, 0, 1, 0.5);
+    var dur = 0.8 + 0.5 * e;
+    var v = voice('wave', dur, 1, 0, 0.12); if (!v) return;
+    var t = v.t;
+    var f = hiss(v, v.out, t, 0.18, dur - 0.18, 0.5 + 0.6 * e, 'bandpass', 220, 620 + 300 * e, dur * 0.4, 0.9);
+    f.frequency.exponentialRampToValueAtTime(240, t + dur);    // travels past and away
+    hiss(v, v.out, t + 0.05, 0.2, dur * 0.7, 0.06 + 0.06 * e, 'highpass', 1800, 3000, dur * 0.5, 0.3);
+    tone(v, v.out, 'sine', t, 110, 85, dur * 0.8, 0.1, dur * 0.8, 0.04 + 0.05 * e);
+  }
+
+  function breath() {
+    var dur = 2.7;
+    var v = voice('breath', dur, 2, 0, 1.5); if (!v) return;
+    var t = v.t, end = t + dur + 0.05, i;
+    var lp = F(v, 'lowpass', 700, 0.3);
+    lp.frequency.setValueAtTime(700, t);
+    lp.frequency.linearRampToValueAtTime(1700, t + 0.9);
+    lp.frequency.linearRampToValueAtTime(800, t + dur);
+    var pad = G(v, 0);
+    pad.gain.setValueAtTime(0.0001, t);
+    pad.gain.linearRampToValueAtTime(1, t + 0.7);
+    pad.gain.linearRampToValueAtTime(0.8, t + 1.4);
+    pad.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    pad.gain.linearRampToValueAtTime(0, t + dur + 0.02);
+    lp.connect(pad); pad.connect(v.out);
+    var notes = [174.61, 261.63, 329.63, 440.0, 523.25];   // Fmaj7 (F3 C4 E4 A4 C5)
+    var lv = [0.03, 0.026, 0.024, 0.022, 0.014];
+    for (i = 0; i < notes.length; i++) {
+      var ng = G(v, lv[i]); ng.connect(lp);
+      for (var k = -1; k <= 1; k += 2) {
+        var o = O('triangle', notes[i] * (1 + k * 0.0035));
+        o.connect(ng);
+        play(v, o, t, end);
+      }
+    }
+    var glint = [1760, 2637.02, 2093];                         // a few fibre glints
+    for (i = 0; i < glint.length; i++) {
+      tone(v, v.out, 'sine', t + 0.9 + i * 0.35, glint[i], glint[i], 0, 0.004, 0.5, 0.018);
+    }
+  }
+
+  function giggle(pan) {
+    var p = clamp(pan, -1, 1, 0);
+    var v = voice('giggle', 0.55, 1, p, 0.3); if (!v) return;
+    var t = v.t;
+    var scale = [1567.98, 1318.51, 1174.66, 1046.5, 880.0];  // G6 E6 D6 C6 A5 (pentatonic)
+    var pats = [[0, 1, 0, 2, 3], [1, 0, 1, 2], [0, 2, 1, 3, 4], [2, 1, 0, 1]];
+    var pat = pats[Math.floor(Math.random() * pats.length) % pats.length];
+    var step = 0.068 + Math.random() * 0.012, ti = t;
+    for (var i = 0; i < pat.length; i++) {
+      var f = scale[pat[i]] * rnd(0.99, 1.01);
+      tone(v, v.out, 'sine', ti, f * 0.9, f * 1.08, 0.035, 0.004, 0.06, 0.04 * (1 - i * 0.1));
+      ti += step * (1 + i * 0.05);
+    }
+  }
+
+  function plop() {
+    var v = voice('plop', 0.35, 1, 0, 0.06); if (!v) return;
+    var t = v.t;
+    tone(v, v.out, 'sine', t, 430, 175, 0.08, 0.003, 0.13, 0.12);
+    tone(v, v.out, 'sine', t + 0.11, 300, 190, 0.05, 0.003, 0.08, 0.045);     // small settle
+    hiss(v, v.out, t, 0.002, 0.04, 0.25, 'lowpass', 700, 300, 0.04, 0.3);
+  }
+
+  return {
+    state: function () { try { return ctx ? ctx.state : 'none'; } catch (e) { return 'error'; } },
+    unlock: safe(unlock),
+    suspend: safe(suspend),
+    resume: safe(resume),
+    setRub: safe(setRub),
+    boing: safe(boing),
+    seatBoing: safe(seatBoing),
+    thud: safe(thud),
+    softLand: safe(softLand),
+    ribbon: safe(ribbon),
+    catchBall: safe(catchBall),
+    pickBall: safe(pickBall),
+    throwBall: safe(throwBall),
+    tick: safe(tick),
+    wobble: safe(wobble),
+    linkOpen: safe(linkOpen),
+    wave: safe(wave),
+    breath: safe(breath),
+    giggle: safe(giggle),
+    setRoll: safe(setRoll),
+    plop: safe(plop)
+  };
+})();
+// ===================================================================
+//  World layout: one sheet, seams, sections
+// ===================================================================
+const SHEET = { x0: -1.8, x1: 1.8, z0: -1.05, z1: 1.05 };
+const FLOOR_Y = -0.56;
+const KID_Z = -0.2;
+const SZ = [-0.66, 0.1, 0.72];              // horizontal seams (z const)
+const SX = [-1.2, -0.6, 0.0, 0.6, 1.2];      // vertical seams (x const); ±0.6 = section boundaries
+const BOUNDS = [-0.6, 0.6];
+const SEAM_X_EXT = [-1.72, 1.72], SEAM_Z_EXT = [-0.98, 0.98];
+const SECTION_OF = (x) => x < BOUNDS[0] ? 0 : (x > BOUNDS[1] ? 2 : 1);
+
+// seams as polylines (straight) ; each with bins of 0.1 m
+const SEAMS = [];
+SZ.forEach((z, i) => SEAMS.push({ id: SEAMS.length, axis: 0, c: z, a: SEAM_X_EXT[0], b: SEAM_X_EXT[1], foot: i === 1 }));
+SX.forEach((x, i) => SEAMS.push({ id: SEAMS.length, axis: 1, c: x, a: SEAM_Z_EXT[0], b: SEAM_Z_EXT[1], boundary: i === 1 || i === 3 }));
+const BIN = 0.1;
+const BINS = []; // {seam, s, x, z}
+SEAMS.forEach(s => {
+  s.bin0 = BINS.length;
+  const n = Math.round((s.b - s.a) / BIN);
+  s.nbin = n;
+  for (let k = 0; k < n; k++) {
+    const t = s.a + (k + 0.5) * BIN;
+    BINS.push({ seam: s.id, s: t, x: s.axis === 0 ? t : s.c, z: s.axis === 0 ? s.c : t });
+  }
+});
+function seamPoint(s, t) { return s.axis === 0 ? [t, s.c] : [s.c, t]; }
+function seamParam(s, x, z) { return clamp(s.axis === 0 ? x : z, s.a, s.b); }
+function binAt(s, t) { return s.bin0 + clamp(Math.floor((t - s.a) / BIN), 0, s.nbin - 1); }
+
+// ===================================================================
+//  Cloth: one continuous height field (wave equation + coupling)
+// ===================================================================
+const NX = 73, NZ = 43;
+const DX = (SHEET.x1 - SHEET.x0) / (NX - 1), DZ = (SHEET.z1 - SHEET.z0) / (NZ - 1);
+const NN = NX * NZ;
+const Cl = {
+  h: new Float32Array(NN), v: new Float32Array(NN), f: new Float32Array(NN),
+  wx: new Float32Array(NN), wz: new Float32Array(NN),
+  vis: new Float32Array(NN),      // visual-only offset (stepping cue)
+  c2: 2.5 * 2.5, k: 30.0, damp: 4.2, visc: 0.012,
+  link: [0.3, 0.3], linkBase: [0.3, 0.3], linkHold: [0, 0], boost: 0,
+  bIdx: [Math.round((BOUNDS[0] - SHEET.x0) / DX), Math.round((BOUNDS[1] - SHEET.x0) / DX)],
+};
+Cl.wx.fill(1); Cl.wz.fill(1);
+function clothApplyLinks() {
+  for (let b = 0; b < 2; b++) {
+    const i = Cl.bIdx[b];
+    const w = Cl.link[b];
+    for (let j = 0; j < NZ; j++) { Cl.wx[(i - 1) + j * NX] = w; Cl.wx[i + j * NX] = w; }
+  }
+}
+clothApplyLinks();
+const gx = (x) => (x - SHEET.x0) / DX, gz = (z) => (z - SHEET.z0) / DZ;
+
+function clothForce(x, z, r, amp) {
+  // gaussian downward pressure (accel), amp m/s^2
+  const R = r * 2.4;
+  const i0 = Math.max(1, Math.floor(gx(x - R))), i1 = Math.min(NX - 2, Math.ceil(gx(x + R)));
+  const j0 = Math.max(1, Math.floor(gz(z - R))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + R)));
+  const inv = 1 / (r * r);
+  for (let j = j0; j <= j1; j++) {
+    const pz = SHEET.z0 + j * DZ, dz2 = (pz - z) * (pz - z);
+    for (let i = i0; i <= i1; i++) {
+      const px = SHEET.x0 + i * DX; const d2 = (px - x) * (px - x) + dz2;
+      Cl.f[i + j * NX] += amp * Math.exp(-d2 * inv);
+    }
+  }
+}
+function clothForceEllipse(x, z, rx, rz, amp) {
+  const i0 = Math.max(1, Math.floor(gx(x - rx * 2.2))), i1 = Math.min(NX - 2, Math.ceil(gx(x + rx * 2.2)));
+  const j0 = Math.max(1, Math.floor(gz(z - rz * 2.2))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + rz * 2.2)));
+  const ix = 1 / (rx * rx), iz = 1 / (rz * rz);
+  for (let j = j0; j <= j1; j++) {
+    const pz = SHEET.z0 + j * DZ, dz2 = (pz - z) * (pz - z) * iz;
+    for (let i = i0; i <= i1; i++) {
+      const px = SHEET.x0 + i * DX; const e = (px - x) * (px - x) * ix + dz2;
+      // flat-bottomed bowl
+      Cl.f[i + j * NX] += amp * Math.exp(-e * e * 0.9);
+    }
+  }
+}
+function clothImpulse(x, z, r, dv) {
+  const R = r * 2.4;
+  const i0 = Math.max(1, Math.floor(gx(x - R))), i1 = Math.min(NX - 2, Math.ceil(gx(x + R)));
+  const j0 = Math.max(1, Math.floor(gz(z - R))), j1 = Math.min(NZ - 2, Math.ceil(gz(z + R)));
+  const inv = 1 / (r * r);
+  for (let j = j0; j <= j1; j++) {
+    const pz = SHEET.z0 + j * DZ, dz2 = (pz - z) * (pz - z);
+    for (let i = i0; i <= i1; i++) {
+      const px = SHEET.x0 + i * DX; const d2 = (px - x) * (px - x) + dz2;
+      Cl.v[i + j * NX] -= dv * Math.exp(-d2 * inv);
+    }
+  }
+}
+function clothStep(dt) {
+  const h = Cl.h, v = Cl.v, f = Cl.f, wx = Cl.wx, wz = Cl.wz;
+  const cx = Cl.c2 / (DX * DX), cz = Cl.c2 / (DZ * DZ), k = Cl.k, d = Cl.damp, visc = Cl.visc / Cl.c2;
+  for (let j = 1; j < NZ - 1; j++) {
+    const row = j * NX;
+    for (let i = 1; i < NX - 1; i++) {
+      const n = row + i, hn = h[n];
+      const lap = cx * (wx[n] * (h[n + 1] - hn) + wx[n - 1] * (h[n - 1] - hn)) + cz * (wz[n] * (h[n + NX] - hn) + wz[n - NX] * (h[n - NX] - hn));
+      const vl = cx * (v[n + 1] + v[n - 1] - 2 * v[n]) + cz * (v[n + NX] + v[n - NX] - 2 * v[n]);
+      v[n] += (lap - k * hn - d * v[n] - f[n] + visc * vl) * dt;
+    }
+  }
+  for (let n = 0; n < NN; n++) {
+    let hv = h[n] + v[n] * dt;
+    if (hv < -0.42) { hv = -0.42; if (v[n] < 0) v[n] = 0; }
+    if (hv > 0.18) { hv = 0.18; if (v[n] > 0) v[n] = 0; }
+    h[n] = hv;
+  }
+}
+function sampleArr(arr, x, z) {
+  const fx = clamp(gx(x), 0, NX - 1.001), fz = clamp(gz(z), 0, NZ - 1.001);
+  const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
+  const n = i + j * NX;
+  return (arr[n] * (1 - tx) + arr[n + 1] * tx) * (1 - tz) + (arr[n + NX] * (1 - tx) + arr[n + NX + 1] * tx) * tz;
+}
+const clothH = (x, z) => sampleArr(Cl.h, x, z);
+const clothV = (x, z) => sampleArr(Cl.v, x, z);
+function clothSlope(x, z) {
+  const e = 0.05;
+  return [(clothH(x + e, z) - clothH(x - e, z)) / (2 * e), (clothH(x, z + e) - clothH(x, z - e)) / (2 * e)];
+}
+function insideSheet(x, z, m) { m = m || 0; return x > SHEET.x0 + m && x < SHEET.x1 - m && z > SHEET.z0 + m && z < SHEET.z1 - m; }
+
+// ===================================================================
+//  Environment geometry (static, world space, one draw)
+// ===================================================================
+const PAD = { ix: SHEET.x1 - 0.05, iz: SHEET.z1 - 0.05, ox: SHEET.x1 + 0.42, oz: SHEET.z1 + 0.40 };
+function buildEnv() {
+  const parts = [];
+  const kindGeo = (g, kind) => { for (let i = 0; i < g.verts.length; i += STRIDE) { g.verts[i + 8] = kind; } return g; };
+  const tr = (g, t, s) => {
+    const m = M4.create(); M4.basis(m, [s ? s[0] : 1, 0, 0], [0, s ? s[1] : 1, 0], [0, 0, s ? s[2] : 1], t);
+    const nm = new Float32Array(9); M4.normal(nm, m); return xformGeo(g, m, nm);
+  };
+  // floor
+  parts.push(kindGeo(surface(24, 16, (u, v) => ({ p: [lerp(-16, 16, u), FLOOR_Y, lerp(-5.6, 12, v)], n: [0, 1, 0] })), 0));
+  // back wall + wall pads
+  parts.push(kindGeo(surface(8, 6, (u, v) => ({ p: [lerp(-16, 16, u), lerp(FLOOR_Y, 7, v), -5.6], n: [0, 0, 1] })), 1));
+  for (let k = -7; k <= 7; k++) parts.push(kindGeo(tr(roundedBoxGeo(0.58, 0.42, 0.05, 0.03, 3), [k * 1.2, FLOOR_Y + 0.44, -5.56]), 2));
+  // side walls (seen from portrait screens)
+  [-1, 1].forEach(sd => {
+    parts.push(kindGeo(surface(6, 6, (u, v) => ({ p: [sd * 7.2, lerp(FLOOR_Y, 7, v), lerp(-5.6, 12, u)], n: [-sd, 0, 0] })), 1));
+    for (let k = -4; k <= 9; k++) parts.push(kindGeo(tr(roundedBoxGeo(0.05, 0.42, 0.58, 0.03, 3), [sd * 7.16, FLOOR_Y + 0.44, k * 1.2]), 2));
+  });
+  // floor mats around the trampoline
+  parts.push(kindGeo(tr(roundedBoxGeo(PAD.ox + 0.75, 0.022, PAD.oz + 0.7, 0.018, 3), [0, FLOOR_Y + 0.02, 0.02]), 3));
+  // frame pads: front/back split at the section boundaries so the sections first look like separate pads
+  const padY = 0.018, padH = 0.05, padW = (PAD.oz - PAD.iz) / 2, sideW = (PAD.ox - PAD.ix) / 2;
+  const xs = [[-PAD.ox, BOUNDS[0]], [BOUNDS[0], BOUNDS[1]], [BOUNDS[1], PAD.ox]];
+  const pads = [];
+  xs.forEach(([a, b]) => {
+    const cx = (a + b) / 2, hw = (b - a) / 2 - 0.004;
+    pads.push(tr(roundedBoxGeo(hw, padH, padW, 0.04, 4), [cx, padY, PAD.iz + padW]));
+    pads.push(tr(roundedBoxGeo(hw, padH, padW, 0.04, 4), [cx, padY, -(PAD.iz + padW)]));
+  });
+  pads.push(tr(roundedBoxGeo(sideW, padH, PAD.iz - 0.003, 0.04, 4), [PAD.ix + sideW, padY, 0]));
+  pads.push(tr(roundedBoxGeo(sideW, padH, PAD.iz - 0.003, 0.04, 4), [-(PAD.ix + sideW), padY, 0]));
+  const sx = PAD.ox + 0.035, sz = PAD.oz + 0.035;
+  pads.push(tr(roundedBoxGeo(sx, 0.075, 0.012, 0.01, 2), [0, -0.09, sz]));
+  pads.push(tr(roundedBoxGeo(sx, 0.075, 0.012, 0.01, 2), [0, -0.09, -sz]));
+  pads.push(tr(roundedBoxGeo(0.012, 0.075, sz, 0.01, 2), [sx, -0.09, 0]));
+  pads.push(tr(roundedBoxGeo(0.012, 0.075, sz, 0.01, 2), [-sx, -0.09, 0]));
+  pads.forEach(p => parts.push(kindGeo(p, 4)));
+  // metal frame: rails under the skirt and legs with foot plates
+  const rail = (a, b, r) => {
+    const d = V.sub(b, a); const L = V.len(d); const [bx, by, bz] = basisFromY(d);
+    const m = M4.create(); M4.basis(m, bx, by, bz, a); const nm = new Float32Array(9); M4.normal(nm, m);
+    return kindGeo(xformGeo(cylinderGeo(r, 0, L, 12), m, nm), 5);
+  };
+  const ry = -0.19, rx = sx + 0.02, rz = sz + 0.02;
+  parts.push(rail([-rx, ry, rz], [rx, ry, rz], 0.024));
+  parts.push(rail([-rx, ry, -rz], [rx, ry, -rz], 0.024));
+  parts.push(rail([rx, ry, -rz], [rx, ry, rz], 0.024));
+  parts.push(rail([-rx, ry, -rz], [-rx, ry, rz], 0.024));
+  [[-rx + 0.1, rz - 0.03], [0, rz - 0.03], [rx - 0.1, rz - 0.03], [-rx + 0.1, -rz + 0.03], [0, -rz + 0.03], [rx - 0.1, -rz + 0.03]].forEach(([x, z]) => {
+    parts.push(rail([x, FLOOR_Y + 0.03, z], [x, ry, z], 0.022));
+    parts.push(kindGeo(tr(roundedBoxGeo(0.05, 0.008, 0.05, 0.006, 1), [x, FLOOR_Y + 0.045, z]), 5));
+  });
+  // dark spring gap under the sheet edge
+  parts.push(kindGeo(surface(1, 1, (u, v) => ({ p: [lerp(-PAD.ox, PAD.ox, u), -0.5, lerp(-PAD.oz, PAD.oz, v)], n: [0, 1, 0] })), 6));
+  // rope for the ribbon (high above)
+  parts.push(rail([-9, 3.05, KID_Z], [9, 3.05, KID_Z], 0.008));
+  const g = mergeGeo(parts);
+  return makeMesh(g.verts, g.idx);
+}
+// top-down shadow map region (baked each frame)
+const SHW = { x0: -2.5, x1: 2.5, z0: -1.65, z1: 1.65, w: 256, h: 128 };
+
+// cloth static mesh data
+function buildClothBuffers() {
+  const xz = new Float32Array(NN * 2);
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const n = i + j * NX; xz[n * 2] = SHEET.x0 + i * DX; xz[n * 2 + 1] = SHEET.z0 + j * DZ;
+  }
+  const idx = [];
+  for (let j = 0; j < NZ - 1; j++) for (let i = 0; i < NX - 1; i++) {
+    const a = i + j * NX, b = a + 1, c = a + NX, d = c + 1;
+    idx.push(a, c, b, b, c, d);
+  }
+  const bxz = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bxz); gl.bufferData(gl.ARRAY_BUFFER, xz, gl.STATIC_DRAW);
+  const dyn = new Float32Array(NN * 4);
+  const bdyn = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bdyn); gl.bufferData(gl.ARRAY_BUFFER, dyn, gl.DYNAMIC_DRAW);
+  const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+  return { bxz, bdyn, dyn, ibo, count: idx.length };
+}
+function updateClothDyn(cb) {
+  const h = Cl.h, vis = Cl.vis, dyn = cb.dyn;
+  const ix = 1 / (2 * DX), iz = 1 / (2 * DZ);
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const n = i + j * NX;
+    const hc = h[n] + vis[n];
+    const hl = i > 0 ? h[n - 1] + vis[n - 1] : hc, hr = i < NX - 1 ? h[n + 1] + vis[n + 1] : hc;
+    const hb = j > 0 ? h[n - NX] + vis[n - NX] : hc, hf = j < NZ - 1 ? h[n + NX] + vis[n + NX] : hc;
+    const o = n * 4;
+    dyn[o] = hc; dyn[o + 1] = (hr - hl) * ix; dyn[o + 2] = (hf - hb) * iz;
+    dyn[o + 3] = ((hl + hr + hb + hf) - 4 * hc) * 40.0; // curvature (+ = dent)
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb.bdyn);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, dyn);
+}
+// ===================================================================
+//  Children: meshes, faces, pose solver, draw lists
+// ===================================================================
+const KID_DEFS = [
+  { // 0: protagonist girl (centre)
+    skin: hex(0xe6b592), hair: hex(0x3b2417), hairHi: hex(0x8a6a50), shirt: hex(0xf06f57), bottom: hex(0x666d7a), legsCovered: true,
+    socks: hex(0xf2f1ec), iris: hex(0x5a3a22), tie: hex(0xffcf3a), style: 0, scale: 1.1, brow: '#4a2c1c', lip: '#c8605a', blush: 'rgba(240,120,110,0.28)',
+  },
+  { // 1: boy (left)
+    skin: hex(0xb47a52), hair: hex(0x17110e), hairHi: hex(0x5a4a40), shirt: hex(0xe9b23a), bottom: hex(0x2b3554), legsCovered: false,
+    socks: hex(0xdcdcd8), iris: hex(0x2c1a10), tie: hex(0x000000), style: 1, scale: 1.13, brow: '#22160f', lip: '#9a5040', blush: 'rgba(200,90,70,0.18)',
+  },
+  { // 2: girl (right)
+    skin: hex(0xf2cdb5), hair: hex(0x7b4a2a), hairHi: hex(0xc49470), shirt: hex(0xb29ce6), bottom: hex(0x4e6c9a), legsCovered: false,
+    socks: hex(0xf6f6f1), iris: hex(0x3e5f80), tie: hex(0xff7aa8), style: 2, scale: 1.06, brow: '#6a4028', lip: '#d4706a', blush: 'rgba(245,120,120,0.30)',
+  },
+];
+const HEAD_R = 0.091;
+const FACE_U = (th) => 0.5 + th / (PI * 0.85);
+const FACE_V = (ph) => 0.5 - ph / (PI * 0.75);
+function headShape(th, ph) {
+  // child head: slightly tall, rounder cranium, narrower soft chin
+  const n = [Math.sin(th) * Math.cos(ph), Math.sin(ph), Math.cos(th) * Math.cos(ph)];
+  let x = n[0], y = n[1] * 1.07, z = n[2];
+  const low = Math.max(0, -ph);
+  const front = Math.max(0, Math.cos(th));
+  const nar = 1 - 0.16 * Math.pow(Math.sin(low), 2) * (0.5 + 0.5 * front);
+  x *= nar * 0.97; z *= (1 - 0.05 * Math.pow(Math.sin(low), 2));
+  // cheeks
+  const cheek = Math.exp(-Math.pow((Math.abs(th) - 0.55) / 0.3, 2) - Math.pow((ph + 0.22) / 0.22, 2));
+  const s = 1 + cheek * 0.035;
+  // back of skull
+  const back = Math.max(0, -Math.cos(th)) * Math.max(0, Math.sin(ph + 0.3));
+  return [x * s * HEAD_R, y * HEAD_R * (1 + back * 0.04), z * s * HEAD_R * (1 + back * 0.06)];
+}
+let MESH = {};
+function buildKidMeshes() {
+  MESH.capsule = (() => { const g = capsuleGeo(14, 5); return makeMesh(g.verts, g.idx); })();
+  MESH.sphere = (() => { const g = sphereGeo(20, 14); return makeMesh(g.verts, g.idx); })();
+  MESH.sphereLo = (() => { const g = sphereGeo(12, 8); return makeMesh(g.verts, g.idx); })();
+  // head with face UVs
+  {
+    const g = surface(30, 22, (u, v) => {
+      const th = (u - 0.5) * TAU, ph = (0.5 - v) * PI;
+      const e = 0.002;
+      const p = headShape(th, ph);
+      const pu = headShape(th + e, ph), pv = headShape(th, ph + e);
+      let n = V.norm(V.cross(V.sub(pu, p), V.sub(pv, p)));
+      if (V.dot(n, p) < 0) n = V.scale(n, -1);
+      if (Math.abs(ph) > 1.55) n = V.norm(p);
+      return { p, n, uv: [clamp(FACE_U(th), 0.002, 0.998), clamp(FACE_V(ph), 0.002, 0.998)] };
+    });
+    MESH.head = makeMesh(g.verts, g.idx);
+  }
+  // hair caps per style
+  MESH.hair = [0, 1, 2].map(style => {
+    const g = surface(32, 22, (u, v) => {
+      const th = (u - 0.5) * TAU, ph = (0.5 - v) * PI;
+      const at = Math.abs(th);
+      let keep = true;
+      let thick = 1.10;
+      if (style === 0) { // pigtail girl: centre part, bangs
+        const hl = 0.20 + 0.42 * Math.pow(Math.min(at / 1.25, 1), 2);
+        if (at < 1.25 && ph < hl) keep = false;
+        if (at >= 1.25 && ph < -0.05 - 0.25 * Math.max(0, (at - 1.25) / 1.9)) keep = false;
+        thick = 1.10 + 0.03 * Math.max(0, Math.sin(ph));
+      } else if (style === 1) { // short boy hair
+        const hl = 0.36 + 0.35 * Math.pow(Math.min(at / 1.3, 1), 2);
+        if (at < 1.3 && ph < hl) keep = false;
+        if (at >= 1.3 && ph < 0.12 - 0.4 * Math.max(0, (at - 1.3) / 1.84)) keep = false;
+        thick = 1.07 + 0.03 * Math.max(0, Math.sin(ph));
+      } else { // bob with bangs
+        const hl = 0.16 + 0.36 * Math.pow(Math.min(at / 1.2, 1), 2);
+        if (at < 1.2 && ph < hl) keep = false;
+        if (at >= 1.2 && ph < -0.55) keep = false;
+        thick = 1.12 + 0.06 * Math.max(0, -Math.sin(ph)) * (at > 1.0 ? 1 : 0.3);
+      }
+      const p0 = headShape(th, ph);
+      const p = V.scale(p0, keep ? thick : 0.82);
+      const n = V.norm(p0);
+      return { p, n, uv: [u, v] };
+    });
+    return makeMesh(g.verts, g.idx);
+  });
+  // torso lathe (y from 0 to 1, scaled in model)
+  {
+    const prof = [[0, 0.0], [0.02, 0.085], [0.08, 0.108], [0.22, 0.106], [0.42, 0.101], [0.62, 0.108], [0.8, 0.114], [0.9, 0.104], [0.96, 0.075], [1.0, 0.045]];
+    const rAt = (y) => { for (let i = 1; i < prof.length; i++) if (y <= prof[i][0]) { const a = prof[i - 1], b = prof[i]; return lerp(a[1], b[1], (y - a[0]) / (b[0] - a[0])); } return 0.04; };
+    const H = 0.32, dz = 0.70;
+    const g = surface(20, 14, (u, v) => {
+      const th = u * TAU, y = v;
+      const r = rAt(y), r2 = rAt(Math.min(1, y + 0.01));
+      const p = [Math.sin(th) * r, y * H, Math.cos(th) * r * dz];
+      const dr = (r2 - r) / (0.01 * H);
+      const n = V.norm([Math.sin(th), -dr, Math.cos(th) / dz]);
+      return { p, n, uv: [u * 2, v * 2] };
+    });
+    MESH.torso = makeMesh(g.verts, g.idx);
+  }
+}
+// ---------- face textures (4 expressions per kid) ----------
+function drawFace(def, expr) {
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = S; c.height = S;
+  const x = c.getContext('2d');
+  // transparent base -> shader mixes with skin colour
+  x.clearRect(0, 0, S, S);
+  const P = (th, ph) => [FACE_U(th) * S, FACE_V(ph) * S];
+  // soft eye-socket shading
+  [-1, 1].forEach(sd => {
+    const [ex, ey] = P(sd * 0.36, 0.04);
+    const gr = x.createRadialGradient(ex, ey - 2, 2, ex, ey, 22);
+    gr.addColorStop(0, 'rgba(120,70,50,0.10)'); gr.addColorStop(1, 'rgba(120,70,50,0)');
+    x.fillStyle = gr; x.beginPath(); x.arc(ex, ey, 22, 0, TAU); x.fill();
+    // upper lash line
+    x.strokeStyle = 'rgba(40,22,15,0.75)'; x.lineWidth = 2.2; x.lineCap = 'round';
+    x.beginPath(); x.ellipse(ex, ey + 1, 12, 9, 0, PI * 1.12, PI * 1.88); x.stroke();
+  });
+  // brows
+  const browUp = expr === 3 ? 5 : (expr === 2 ? 3 : 0);
+  [-1, 1].forEach(sd => {
+    const [bx, by] = P(sd * 0.37, 0.30);
+    x.strokeStyle = def.brow; x.globalAlpha = 0.85; x.lineWidth = 3.4; x.lineCap = 'round';
+    x.beginPath(); x.moveTo(bx - 13 * sd * -1 - (sd > 0 ? 13 : -13) * 0, by + 3 - browUp);
+    x.quadraticCurveTo(bx, by - 4 - browUp, bx + 14 * sd, by + 2 - browUp * 0.6); x.stroke();
+    x.globalAlpha = 1;
+  });
+  // nose shading
+  {
+    const [nx, ny] = P(0, -0.15);
+    x.fillStyle = 'rgba(120,60,40,0.18)';
+    x.beginPath(); x.ellipse(nx - 5, ny + 3, 3, 2, 0, 0, TAU); x.ellipse(nx + 5, ny + 3, 3, 2, 0, 0, TAU); x.fill();
+    const g2 = x.createRadialGradient(nx, ny + 4, 1, nx, ny + 4, 14); g2.addColorStop(0, 'rgba(110,60,40,0.12)'); g2.addColorStop(1, 'rgba(110,60,40,0)');
+    x.fillStyle = g2; x.beginPath(); x.arc(nx, ny + 4, 14, 0, TAU); x.fill();
+  }
+  // cheeks
+  const blushA = expr === 2 ? 1.35 : (expr === 1 ? 1.15 : 1.0);
+  [-1, 1].forEach(sd => {
+    const [cx, cy] = P(sd * 0.58, -0.22);
+    const gr = x.createRadialGradient(cx, cy, 1, cx, cy, 20);
+    gr.addColorStop(0, def.blush); gr.addColorStop(1, 'rgba(240,120,110,0)');
+    x.globalAlpha = Math.min(1, blushA); x.fillStyle = gr; x.beginPath(); x.arc(cx, cy, 20, 0, TAU); x.fill(); x.globalAlpha = 1;
+  });
+  // mouth
+  const [mx, my] = P(0, -0.43);
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  if (expr === 0) {
+    x.strokeStyle = def.lip; x.lineWidth = 3.2;
+    x.beginPath(); x.moveTo(mx - 12, my - 1); x.quadraticCurveTo(mx, my + 5, mx + 12, my - 1); x.stroke();
+  } else if (expr === 1) {
+    x.strokeStyle = def.lip; x.lineWidth = 3.4;
+    x.beginPath(); x.moveTo(mx - 17, my - 4); x.quadraticCurveTo(mx, my + 10, mx + 17, my - 4); x.stroke();
+    x.strokeStyle = 'rgba(120,50,40,0.25)'; x.lineWidth = 2;
+    x.beginPath(); x.arc(mx - 19, my - 4, 3, -0.5, 1.2); x.stroke(); x.beginPath(); x.arc(mx + 19, my - 4, 3, 1.9, 3.6); x.stroke();
+  } else if (expr === 2) {
+    x.fillStyle = '#5a1e1e';
+    x.beginPath(); x.moveTo(mx - 19, my - 6); x.quadraticCurveTo(mx, my - 2, mx + 19, my - 6); x.quadraticCurveTo(mx + 14, my + 16, mx, my + 17); x.quadraticCurveTo(mx - 14, my + 16, mx - 19, my - 6); x.fill();
+    x.fillStyle = '#f4f0ea'; x.beginPath(); x.moveTo(mx - 15, my - 4.5); x.quadraticCurveTo(mx, my - 1, mx + 15, my - 4.5); x.lineTo(mx + 12, my + 1); x.quadraticCurveTo(mx, my + 3, mx - 12, my + 1); x.fill();
+    x.fillStyle = '#d0626a'; x.beginPath(); x.ellipse(mx, my + 11, 9, 5, 0, 0, TAU); x.fill();
+    x.strokeStyle = def.lip; x.lineWidth = 2.2; x.beginPath(); x.moveTo(mx - 19, my - 6); x.quadraticCurveTo(mx + 0, my + 22, mx + 19, my - 6); x.stroke();
+  } else {
+    x.fillStyle = '#5a1e1e'; x.beginPath(); x.ellipse(mx, my + 3, 7.5, 9, 0, 0, TAU); x.fill();
+    x.fillStyle = '#c95a62'; x.beginPath(); x.ellipse(mx, my + 7, 5, 3.5, 0, 0, TAU); x.fill();
+    x.strokeStyle = def.lip; x.lineWidth = 2.4; x.beginPath(); x.ellipse(mx, my + 3, 8.5, 10, 0, 0, TAU); x.stroke();
+  }
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  return t;
+}
+// face texture colours are sRGB; the shader mixes in linear, so convert the canvas data
+function linearizeCanvasFaces() { /* faces are subtle shading; drawn in sRGB-ish, acceptable */ }
+
+// ---------- pose helpers ----------
+function ik2(a, target, l1, l2, pole) {
+  let d = V.sub(target, a);
+  let dist = V.len(d);
+  const dir = dist > 1e-5 ? V.scale(d, 1 / dist) : [0, -1, 0];
+  dist = clamp(dist, Math.abs(l1 - l2) + 0.01, l1 + l2 - 0.002);
+  const cosA = clamp((l1 * l1 + dist * dist - l2 * l2) / (2 * l1 * dist), -1, 1);
+  const sinA = Math.sqrt(1 - cosA * cosA);
+  let pp = V.sub(pole, V.scale(dir, V.dot(pole, dir)));
+  if (V.len(pp) < 1e-5) pp = [0, 0, 1];
+  pp = V.norm(pp);
+  const mid = V.add(a, V.add(V.scale(dir, l1 * cosA), V.scale(pp, l1 * sinA)));
+  const end = V.add(a, V.scale(dir, dist));
+  return { mid, end };
+}
+
+// build the world-space joints of a kid from its animation params
+function solveKid(k) {
+  const s = k.def.scale;
+  const sit = k.sitAmt, cr = k.crouch * (1 - sit * 0.7);
+  const air = k.airAmt;
+  // local coordinates (facing +z), origin on ground under pelvis
+  const L = {};
+  const pelvisStand = [0, 0.598 - 0.205 * cr - 0.004 * k.breath, -0.045 * cr];
+  const pelvisSit = [0, 0.10, -0.02];
+  const pel = V.lerp(pelvisStand, pelvisSit, sit);
+  if (air > 0) pel[1] += 0; // root already lifted in air
+  const lean = 0.42 * cr - 0.06 * sit + k.leanFwd;
+  L.pelvis = pel;
+  // spine
+  const spineDir = rotX([0, 1, 0], lean);
+  const spineLen = 0.32;
+  L.chest = V.add(pel, V.scale(spineDir, spineLen * 0.62));
+  L.neck = V.add(pel, V.scale(spineDir, spineLen));
+  L.spineDir = spineDir;
+  // hips
+  const hipY = -0.035;
+  const hipL = V.add(pel, [0.068, hipY, 0]), hipR = V.add(pel, [-0.068, hipY, 0]);
+  const th = 0.27, sh = 0.255, ank = 0.055;
+  const legs = [];
+  [[hipL, 1], [hipR, -1]].forEach(([hip, sd]) => {
+    // ankle target
+    const ankStand = [sd * 0.078, ank, 0.03];
+    const ankSit = [-sd * 0.055, 0.05, 0.20];
+    let at = V.lerp(ankStand, ankSit, sit);
+    if (air > 0) {
+      const tuck = k.tuck * (1 - sit);
+      const free = V.add(hip, [sd * 0.012, -(th + sh) * (0.97 - tuck * 0.3), 0.03 + tuck * 0.14]);
+      at = V.lerp(at, free, air * (1 - sit));
+    }
+    const pole = V.norm(V.lerp([sd * 0.15, 0, 1], [sd * 1.0, 0.6, 0.6], sit));
+    const r = ik2(hip, at, th, sh, pole);
+    legs.push({ hip, knee: r.mid, ankle: r.end, sd });
+  });
+  L.legs = legs;
+  // ball held position (local)
+  const ballStand = V.add(V.add(pel, V.scale(spineDir, 0.17)), [0, 0, 0.145]);
+  const ballSit = V.add(pel, [0, 0.13, 0.16]);
+  k.ballLocal = V.lerp(ballStand, ballSit, sit);
+  if (k.throwT > 0) k.ballLocal = V.lerp(k.ballLocal, V.add(L.neck, [0, 0.12, 0.12]), Math.sin(Math.min(1, k.throwT) * PI));
+  // shoulders & arms
+  const shY = 0.035;
+  const shoulderL = V.add(L.neck, [0.112, -shY, 0]);
+  const shoulderR = V.add(L.neck, [-0.112, -shY, 0]);
+  const ua = 0.165, fa = 0.148;
+  const arms = [];
+  [[shoulderL, 1], [shoulderR, -1]].forEach(([shp, sd]) => {
+    const side = sd > 0 ? k.armL : k.armR;
+    let hand;
+    // rest
+    let rest = V.add(shp, [sd * 0.04, -0.29, 0.03 + 0.06 * cr]);
+    if (sit > 0) rest = V.lerp(rest, V.add(L.pelvis, [sd * 0.16, 0.10, 0.16]), sit);
+    hand = rest;
+    // jump swing
+    if (k.swing > 0) hand = V.lerp(hand, V.add(shp, [sd * 0.08, 0.14, 0.2]), k.swing);
+    // crouch swing back
+    if (cr > 0.2 && k.swing < 0.1) hand = V.lerp(hand, V.add(shp, [sd * 0.06, -0.22, -0.16]), (cr - 0.2) * 0.8);
+    // reach out toward someone (local dir)
+    if (k.reach > 0) {
+      const d = k.reachDir;
+      const tgt = V.add(shp, V.add(V.scale(d, 0.25), [sd * 0.035, -0.07, 0]));
+      hand = V.lerp(hand, tgt, k.reach);
+    }
+    // reach up
+    const up = side.up;
+    if (up > 0) {
+      // swing the arm up through the front (an arc, not a straight blend)
+      const ang = up * PI * 0.94;
+      const dir = V.norm([sd * 0.06 - sd * 0.1 * smooth(0.6, 1, up), -Math.cos(ang), Math.sin(ang) * 0.55 + 0.08]);
+      hand = V.lerp(hand, V.add(shp, V.scale(dir, 0.305)), smooth(0, 0.35, up));
+    }
+    // holding ball
+    if (k.hold > 0) {
+      const bp = k.ballLocal;
+      hand = V.lerp(hand, V.add(bp, [sd * 0.105, 0.01, -0.02]), k.hold);
+    }
+    // wiggle
+    hand = V.add(hand, [0, Math.sin(k.time * 18 + sd) * 0.02 * k.wiggle, 0]);
+    const raise = Math.max(side.up, k.swing * 0.5);
+    const pole = V.norm(V.lerp([sd * 0.7, -0.7, -0.6], [sd * 0.5, 0.1, 0.85], smooth(0.3, 0.9, raise)));
+    const r = ik2(shp, hand, ua, fa, pole);
+    arms.push({ shoulder: shp, elbow: r.mid, hand: r.end, sd });
+  });
+  L.arms = arms;
+  // head
+  L.headBase = V.add(L.neck, V.scale(spineDir, 0.055));
+  L.head = V.add(L.headBase, V.add(V.scale(spineDir, 0.082), [0, 0, 0.006]));
+  // to world: scale, yaw, translate
+  const yaw = k.yaw;
+  const W = (p) => { const q = rotY(V.scale(p, s), yaw); return [q[0] + k.x, q[1] + k.rootY, q[2] + k.z]; };
+  const J = {
+    pelvis: W(L.pelvis), chest: W(L.chest), neck: W(L.neck), headBase: W(L.headBase), head: W(L.head),
+    legs: legs.map(l => ({ hip: W(l.hip), knee: W(l.knee), ankle: W(l.ankle), sd: l.sd })),
+    arms: arms.map(a => ({ shoulder: W(a.shoulder), elbow: W(a.elbow), hand: W(a.hand), sd: a.sd })),
+    spineDir: rotY(spineDir, yaw), s, yaw, lean, ball: W(k.ballLocal),
+  };
+  // head orientation basis (world)
+  const hy = yaw + k.headYaw, hp = k.headPitch - lean * 0.35;
+  const hz = rotY(rotX([0, 0, 1], -hp), hy);
+  const hyv = rotY(rotX([0, 1, 0], -hp), hy);
+  const hx = V.cross(hyv, hz);
+  J.headBasis = [V.scale(hx, s), V.scale(hyv, s), V.scale(hz, s)];
+  J.headBasisN = [hx, hyv, hz];
+  k.J = J;
+  return J;
+}
+// ---------- draw items ----------
+// pooled draw items (no per-frame matrix allocation)
+const DPOOL = []; let dpoolN = 0;
+function poolItem() {
+  if (dpoolN >= DPOOL.length) DPOOL.push({ m: new Float32Array(16), nm: new Float32Array(9), cap: [0, 0, 0], mesh: null, kind: 0, color: null, color2: null, tex: null });
+  const it = DPOOL[dpoolN++]; it.tex = null; return it;
+}
+function poolReset() { dpoolN = 0; }
+function capItem(a, b, r1, r2, kind, color, list, color2) {
+  const d = V.sub(b, a); const len = V.len(d);
+  const [bx, by, bz] = basisFromY(len > 1e-5 ? d : [0, 1, 0]);
+  const it = poolItem();
+  M4.basis(it.m, bx, by, bz, V.lerp(a, b, 0.5)); M4.normal(it.nm, it.m);
+  it.mesh = MESH.capsule; it.cap[0] = r1; it.cap[1] = r2; it.cap[2] = len * 0.5; it.kind = kind; it.color = color; it.color2 = color2 || color;
+  list.push(it);
+}
+function ellItem(c, basis, sx, sy, sz, kind, color, list, mesh, color2) {
+  const it = poolItem();
+  M4.basis(it.m, V.scale(basis[0], sx), V.scale(basis[1], sy), V.scale(basis[2], sz), c); M4.normal(it.nm, it.m);
+  it.mesh = mesh || MESH.sphere; it.cap[0] = it.cap[1] = it.cap[2] = 0; it.kind = kind; it.color = color; it.color2 = color2 || color;
+  list.push(it);
+}
+function matItem(mesh, m, kind, color, color2, tex, list) {
+  const it = poolItem();
+  it.m.set(m); M4.normal(it.nm, it.m);
+  it.mesh = mesh; it.cap[0] = it.cap[1] = it.cap[2] = 0; it.kind = kind; it.color = color; it.color2 = color2 || color; it.tex = tex || null;
+  list.push(it);
+}
+const _tm = new Float32Array(16);
+function basisYaw(yaw, lean) {
+  const bz = rotY(rotX([0, 0, 1], -lean), yaw), by = rotY(rotX([0, 1, 0], -lean), yaw);
+  return [V.cross(by, bz), by, bz];
+}
+function kidDrawList(k, list) {
+  const J = k.J, d = k.def, s = J.s;
+  const SK = 0, CL = 1, HA = 2, EY = 3, SO = 6, PL = 7;
+  // torso
+  {
+    const B = basisYaw(J.yaw, J.lean);
+    M4.basis(_tm, V.scale(B[0], s * (1 + k.breath * 0.01)), V.scale(B[1], s), V.scale(B[2], s * (1 + k.breath * 0.02)), V.add(J.pelvis, V.scale(J.spineDir, -0.02 * s)));
+    matItem(MESH.torso, _tm, CL, d.shirt, null, null, list);
+    // pelvis / shorts
+    ellItem(V.add(J.pelvis, V.scale(J.spineDir, 0.005)), B, 0.118 * s, 0.075 * s, 0.088 * s, CL, d.bottom, list);
+  }
+  // neck
+  capItem(J.neck, J.headBase, 0.034 * s, 0.032 * s, SK, d.skin, list);
+  // legs
+  J.legs.forEach(l => {
+    const thighCol = d.bottom;
+    if (d.legsCovered) {
+      capItem(l.hip, l.knee, 0.056 * s, 0.044 * s, CL, thighCol, list);
+      capItem(l.knee, l.ankle, 0.043 * s, 0.031 * s, CL, thighCol, list);
+    } else {
+      const shortsEnd = V.lerp(l.hip, l.knee, 0.5);
+      capItem(l.hip, shortsEnd, 0.062 * s, 0.058 * s, CL, thighCol, list);
+      capItem(shortsEnd, l.knee, 0.050 * s, 0.043 * s, SK, d.skin, list);
+      capItem(l.knee, l.ankle, 0.042 * s, 0.031 * s, SK, d.skin, list);
+      // sock cuff
+      capItem(V.lerp(l.knee, l.ankle, 0.8), l.ankle, 0.034 * s, 0.033 * s, SO, d.socks, list);
+    }
+    // foot (sock)
+    const shin = V.norm(V.sub(l.ankle, l.knee));
+    let fwd = rotY([0, 0, 1], J.yaw + l.sd * 0.12);
+    if (k.sitAmt > 0.5) fwd = V.norm(V.lerp(fwd, rotY([-l.sd, 0, 0.3], J.yaw), (k.sitAmt - 0.5) * 2));
+    const ftz = V.norm(V.sub(fwd, V.scale(shin, V.dot(fwd, shin) * 0.4)));
+    const fty = V.norm(V.sub([0, 1, 0], V.scale(ftz, ftz[1])));
+    const ftx = V.cross(fty, ftz);
+    ellItem(V.add(l.ankle, V.add(V.scale(ftz, 0.04 * s), [0, -0.022 * s, 0])), [ftx, fty, ftz], 0.037 * s, 0.03 * s, 0.078 * s, SO, d.socks, list);
+  });
+  // arms
+  J.arms.forEach(a => {
+    capItem(a.shoulder, V.lerp(a.shoulder, a.elbow, 0.45), 0.047 * s, 0.040 * s, CL, d.shirt, list);
+    capItem(a.shoulder, a.elbow, 0.031 * s, 0.028 * s, SK, d.skin, list);
+    capItem(a.elbow, a.hand, 0.027 * s, 0.023 * s, SK, d.skin, list);
+    const fy = V.norm(V.sub(a.hand, a.elbow));
+    const [bx, by, bz] = basisFromY(fy, rotY([0, 0, 1], J.yaw));
+    ellItem(V.add(a.hand, V.scale(fy, 0.03 * s)), [bx, by, bz], 0.027 * s, 0.040 * s, 0.017 * s, SK, d.skin, list);
+    ellItem(V.add(a.hand, V.add(V.scale(fy, 0.012 * s), V.scale(bx, -a.sd * 0.02 * s))), [bx, by, bz], 0.011 * s, 0.022 * s, 0.011 * s, SK, d.skin, list, MESH.sphereLo);
+  });
+  // head
+  const HB = J.headBasis, HN = J.headBasisN, hc = J.head;
+  {
+    M4.basis(_tm, HB[0], HB[1], HB[2], hc);
+    matItem(MESH.head, _tm, SK, d.skin, null, k.faceTex[k.expr], list);
+    matItem(MESH.hair[d.style], _tm, HA, d.hair, d.hairHi, null, list);
+  }
+  const hp = (lx, ly, lz) => V.add(hc, V.add(V.add(V.scale(HB[0], lx), V.scale(HB[1], ly)), V.scale(HB[2], lz)));
+  // ears
+  [-1, 1].forEach(sd => ellItem(hp(sd * 0.088, -0.006, -0.004), HN, 0.011 * s, 0.022 * s, 0.016 * s, SK, d.skin, list, MESH.sphereLo));
+  // nose
+  {
+    const np = headShape(0, -0.13);
+    ellItem(hp(np[0], np[1], np[2] - 0.002), HN, 0.012 * s, 0.011 * s, 0.012 * s, SK, d.skin, list, MESH.sphereLo);
+  }
+  // eyes (3D, gaze)
+  [-1, 1].forEach(sd => {
+    const ep = headShape(sd * 0.36, 0.035);
+    const c = hp(ep[0] * 0.9, ep[1], ep[2] * 0.9);
+    const gz = V.norm(rotY(rotX([0, 0, 1], -k.eyePitch), k.eyeYaw));
+    // gaze in head basis
+    const wz = V.norm(V.add(V.add(V.scale(HN[0], gz[0]), V.scale(HN[1], gz[1])), V.scale(HN[2], gz[2])));
+    const wy0 = HN[1];
+    const wx = V.norm(V.cross(wy0, wz)); const wy = V.cross(wz, wx);
+    const bl = 1 - 0.88 * k.blinkAmt - 0.25 * k.squint;
+    const r = 0.0135 * s;
+    ellItem(c, [wx, wy, wz], r, r * bl, r, EY, d.iris, list, MESH.sphereLo);
+  });
+  // hair extras
+  if (d.style === 0) {
+    [-1, 1].forEach(sd => {
+      const base = hp(sd * 0.088, 0.03, -0.03);
+      const sw = k.tailSwing;
+      const dir = V.norm(V.add(V.add(V.scale(HN[0], sd * 0.55), V.scale(HN[1], -1 + sw * 0.6)), V.scale(HN[2], -0.25)));
+      const [bx, by, bz] = basisFromY(dir);
+      ellItem(V.add(base, V.scale(dir, 0.055 * s)), [bx, by, bz], 0.034 * s, 0.062 * s, 0.032 * s, HA, d.hair, list, MESH.sphere, d.hairHi);
+      ellItem(base, HN, 0.016 * s, 0.016 * s, 0.016 * s, PL, d.tie, list, MESH.sphereLo);
+    });
+  } else if (d.style === 2) {
+    ellItem(hp(0.06, 0.06, 0.05), HN, 0.016 * s, 0.008 * s, 0.01 * s, PL, d.tie, list, MESH.sphereLo);
+  }
+}
+// ===================================================================
+//  Game state
+// ===================================================================
+const GRAV = 7.2;               // child jump gravity (slightly floaty for readability)
+const RANGE = 0.5;              // trace bins within this of a kid's ground point affect the kid
+const WIDE_L = 1.05;            // covered length >= this -> soft wide trace (saucer)
+const RIBBON_TIP = 1.66;
+const RIBBON_H = 0.66;          // jump height that lets the protagonist's hand touch the ribbon
+const SAVE_KEY = 'pyon-261110-2-v1';
+const SEAT_X = 1.5, SEAT_Z0 = -0.75, SEAT_Z1 = 0.6;
+const BALL_X = 1.7, BALL_Z = 0.95;
+const DEFAULT_LAYOUT = {
+  kids: [{ x: 0, z: KID_Z, seated: false }, { x: -1.1, z: KID_Z, seated: true }, { x: 1.1, z: KID_Z, seated: true }],
+  balls: [{ x: -1.38, z: 0.8 }, { x: 1.38, z: 0.8 }, { x: 0.62, z: -0.86 }],
+  owner: [-1, -1, -1],
+};
+const BALL_COLS = [hex(0xffd23a), hex(0xff8a3a), hex(0xffb6c8)];
+const Game = {
+  t: 0, kids: [], balls: [], saucers: [], packets: [], parts: [],
+  trace: null, pointer: null, lastInput: -10, lastUp: -10, firstInputDone: false,
+  invite: null, inviteT: 0, inviteSince: 0, demo: { on: false, t: 0, shown: false, seg: null, T: 1 },
+  revealed: false, reveal: 0, revealPending: false,
+  ribbon: null,
+  stats: { taps: 0, traces: 0, ribbon: 0, launches: 0, chainLaunches: 0, wobbles: 0, crossings: 0, saucers: 0, absorbs: 0, chainAbsorbs: 0, pickups: 0, passes: 0, throws: 0, flows: 0, flowArrivals: 0, cycles: 0, groupHops: 0, boosts: 0, carries: 0, deliveries: 0, chainHops: 0 },
+  log: [],
+  breath: { wait: 0, t: -1 },
+  ripple: { x: 0, z: 0, t: 9, s: 0 },
+  saveState: 'none', loadState: 'none', saveDue: null,
+  tagSeq: 1, lastLandT: -10, hopsSinceInput: 0, testNoIdle: false,
+};
+function logEv(type, data) {
+  Game.log.push(Object.assign({ type, t: +Game.t.toFixed(2) }, data || {}));
+  if (Game.log.length > 600) Game.log.splice(0, 150);
+}
+
+// ===================================================================
+//  Kids
+// ===================================================================
+function makeKid(id, x, z, seated) {
+  return {
+    id, def: KID_DEFS[id], x, z, baseX: x, baseZ: z, seated, state: 'ground',
+    rootY: 0, yaw: 0, airAmt: 0, sitAmt: seated ? 1 : 0, crouch: 0, crouchV: 0, tuck: 0, breath: 0, leanFwd: 0,
+    armL: { up: 0 }, armR: { up: 0 }, swing: 0, reach: 0, reachDir: [0, 0, 1], hold: 0, ballLocal: [0, 0, 0], throwT: 0, wiggle: 0,
+    headYaw: 0, headPitch: 0, eyeYaw: 0, eyePitch: 0, blinkAmt: 0, blinkT: 1.5 + id * 0.9, squint: 0, expr: 0, smile: 0.4, open: 0,
+    tailSwing: 0, tailV: 0, time: id * 1.7, holding: -1, air: null, pending: null, settleT: 0, groundT: 5, landT: -10, wobbleT: 0, wiggleT: 0,
+    happyT: 0, excitedT: 0, lookOverride: null, lookT: 0, faceTex: null, J: null, lastDir: id === 1 ? 1 : -1, partner: -1, reachFor: null,
+    pickT: 0, pickBall: -1, queued: false, seatTo: null, minCrouch: 0,
+  };
+}
+function kidHeadPos(k) { return [k.x, k.rootY + (k.seated ? 0.62 : 1.06) * k.def.scale, k.z]; }
+function chainInvolved(k) { return k.state === 'air' || !!k.pending; }
+function nearestFree(x, z, exclude, minD) {
+  // push a seat position away from other kids and keep it on the sheet
+  let px = clamp(x, -SEAT_X, SEAT_X), pz = clamp(z, SEAT_Z0, SEAT_Z1);
+  for (let it = 0; it < 8; it++) {
+    Game.kids.forEach(o => {
+      if (o === exclude) return;
+      const ox = o.state === 'air' && o.air ? o.air.x1 : o.x, oz = o.state === 'air' && o.air ? o.air.z1 : o.z;
+      const dx = px - ox, dz = pz - oz, d = Math.hypot(dx, dz);
+      if (d < minD) { const s = (minD - d) / (d || 1); px += (dx || (px >= 0 ? 0.01 : -0.01)) * s; pz += dz * s; }
+    });
+    px = clamp(px, -SEAT_X, SEAT_X); pz = clamp(pz, SEAT_Z0, SEAT_Z1);
+  }
+  return [px, pz];
+}
+
+// ===================================================================
+//  Saucers (wide soft zones), packets (travelling deformation)
+// ===================================================================
+function saucerShape(bins) {
+  let x0 = 9, x1 = -9, z0 = 9, z1 = -9, sx = 0, sz = 0;
+  bins.forEach(b => { x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); z0 = Math.min(z0, b.z); z1 = Math.max(z1, b.z); sx += b.x; sz += b.z; });
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  return { x: clamp(cx, -1.5, 1.5), z: clamp(cz, -0.85, 0.8), rx: clamp((x1 - x0) * 0.5 + 0.2, 0.3, 0.75), rz: clamp((z1 - z0) * 0.5 + 0.2, 0.26, 0.6) };
+}
+function makeSaucer(bins, live) {
+  const sh = saucerShape(bins);
+  if (live) { Object.assign(live, sh); return live; }
+  const s = Object.assign(sh, { age: 0, life: 9, amp: 3.6, used: false, occ: [], cap: 1, live: true });
+  Game.saucers = Game.saucers.filter(o => Math.hypot(o.x - s.x, o.z - s.z) > 0.35);
+  Game.saucers.push(s);
+  if (Game.saucers.length > 3) Game.saucers.shift();
+  Game.stats.saucers++;
+  AudioFX.wave(0.25);
+  logEv('saucer', { x: +s.x.toFixed(2), z: +s.z.toFixed(2) });
+  return s;
+}
+function saucerAlive(s) { return s && s.age < s.life && Game.saucers.indexOf(s) >= 0; }
+function saucerTakes(s, k) { return saucerAlive(s) && (s.occ.indexOf(k.id) >= 0 || s.occ.length < s.cap); }
+function saucerAt(x, z, grow) {
+  grow = grow || 1.15;
+  for (const s of Game.saucers) {
+    if (!saucerAlive(s)) continue;
+    const e = Math.pow((x - s.x) / (s.rx * grow), 2) + Math.pow((z - s.z) / (s.rz * grow), 2);
+    if (e <= 1) return s;
+  }
+  return null;
+}
+function saucerNear(x, z, reach) {
+  let best = null, bd = 1e9;
+  for (const s of Game.saucers) {
+    if (!saucerAlive(s) || s.used) continue;
+    const d = Math.hypot(x - s.x, z - s.z);
+    if (d < reach + Math.max(s.rx, s.rz) * 0.5 && d < bd) { bd = d; best = s; }
+  }
+  return best;
+}
+function removeSaucer(s) { Game.saucers = Game.saucers.filter(o => o !== s); }
+function spawnPacket(from, to, e, strong) {
+  const dx = to.x - from.x, dz = to.z - from.z, d = Math.hypot(dx, dz) || 1;
+  const p = { fx: from.x, fz: from.z, x: from.x, z: from.z, ux: dx / d, uz: dz / d, dist: d, trav: 0, e, strong, to, from, dead: false, fade: 1, blocked: false, speed: 2.3, blockAt: -1 };
+  for (let b = 0; b < 2; b++) {
+    const bx = BOUNDS[b];
+    if ((from.x - bx) * (to.x - bx) < 0 && Cl.link[b] < 0.55) {
+      const tb = Math.abs(bx - from.x) / Math.abs(dx || 1) * d;
+      if (p.blockAt < 0 || tb < p.blockAt) p.blockAt = tb;
+    }
+  }
+  if (strong) to.pending = p;
+  Game.packets.push(p);
+  if (strong) AudioFX.wave(clamp(e, 0.2, 1));
+  logEv('packet', { from: from.id, to: to.id, e: +e.toFixed(2), strong });
+}
+function updatePackets(dt) {
+  for (const p of Game.packets) {
+    if (p.dead) continue;
+    p.trav += p.speed * dt;
+    if (p.blockAt >= 0 && p.trav >= p.blockAt) {
+      p.blocked = true; p.trav = p.blockAt;
+      p.fade -= dt * 4;
+      if (p.fade <= 0) { p.dead = true; if (p.to.pending === p) p.to.pending = null; reactWobble(p.to, p.from); }
+    }
+    const tr = Math.min(p.trav, p.dist);
+    p.x = p.fx + p.ux * tr; p.z = p.fz + p.uz * tr;
+    const amp = (20 + 55 * p.e) * Math.max(p.fade, 0) * (p.strong ? 1 : 0.6);
+    if (!p.dead) {
+      clothForce(p.x, p.z, 0.15, amp);
+      clothForce(p.x + p.ux * 0.2, p.z + p.uz * 0.2, 0.12, -amp * 0.35);
+    }
+    if (!p.dead && !p.blocked && p.trav >= p.dist - 0.12) {
+      p.dead = true;
+      const k = p.to;
+      if (k.pending === p) k.pending = null;
+      if (p.strong) arriveChain(k, p);
+      else reactWobble(k, p.from);
+    }
+  }
+  Game.packets = Game.packets.filter(p => !p.dead);
+}
+function reactWobble(k, from) {
+  if (k.state !== 'ground') return;
+  k.crouchV += 1.2; k.wobbleT = 0.7; k.excitedT = 0.6; k.happyT = Math.max(k.happyT, 0.5);
+  k.lookOverride = from ? kidHeadPos(from) : null; k.lookT = 0.8;
+  Game.stats.wobbles++;
+  AudioFX.wobble();
+  logEv('wobble', { kid: k.id });
+}
+function arriveChain(k, p) {
+  if (k.state !== 'ground') return;
+  const sc = saucerAt(k.x, k.z, 1.25);
+  if (sc && saucerTakes(sc, k)) { Game.stats.chainAbsorbs++; absorbInto(k, sc, 'pending'); return; }
+  launch(k, Math.min(p.e, 0.72), { cause: 'chain', from: p.from });
+}
+function sendChain(k, E, fromId) {
+  if (Game.hopsSinceInput >= 5) { logEv('chainRest', { kid: k.id }); return; } // long chains rest by themselves
+  const decay = Cl.boost > 0 ? 0.86 : 0.76;
+  const cands = [];
+  Game.kids.forEach(o => {
+    if (o === k || o.state === 'air' || o.pending || o.groundT < 0.3) return;
+    const side = Math.sign(o.x - k.x) || 1;
+    // only the nearest kid on each side
+    if (Game.kids.some(q => q !== k && q !== o && Math.sign(q.x - k.x) === side && Math.abs(q.x - k.x) < Math.abs(o.x - k.x))) return;
+    let L = 1;
+    for (let b = 0; b < 2; b++) { const bx = BOUNDS[b]; if ((k.x - bx) * (o.x - bx) < 0) L *= Cl.link[b]; }
+    const d = Math.hypot(o.x - k.x, o.z - k.z);
+    const e = E * decay * L * (d > 2.0 ? 0.75 : 1);
+    let pref = e;
+    const src = fromId >= 0 ? Game.kids[fromId] : null;
+    if (src && Math.sign(src.x - k.x) === side) pref -= 0.12; // prefer to carry on away from where the wave came
+    if (!src && k.lastDir && Math.sign(k.lastDir) === side) pref += 0.08;
+    cands.push({ o, e, d, pref });
+  });
+  cands.sort((a, b) => b.pref - a.pref);
+  const strong = cands.find(c => c.e >= 0.2);
+  if (strong) { spawnPacket(k, strong.o, strong.e, true); Game.hopsSinceInput++; }
+  cands.forEach(c => { if (c !== strong && c.d < 1.9) spawnPacket(k, c.o, c.e, false); });
+}
+
+// ===================================================================
+//  Launch / landing
+// ===================================================================
+function underRibbon(k) { const R = Game.ribbon; return Math.hypot(R.x - k.x, KID_Z - k.z) < 0.5 && R.up < 0.3; }
+function launch(k, H, o) {
+  if (k.state === 'air') return;
+  o = o || {};
+  const direct = o.cause === 'trace' || o.cause === 'boost';
+  if (k.id === 0 && !k.seated && direct && o.solo && k.holding < 0 && underRibbon(k)) H = Math.max(H, RIBBON_H);
+  const vy = Math.sqrt(2 * GRAV * H);
+  const T = 2 * vy / GRAV;
+  // leaving a saucer cancels it
+  const inside = saucerAt(k.x, k.z, 1.0);
+  if (inside && inside.used) removeSaucer(inside);
+  let x1 = k.x, z1 = k.z, sc = o.to ? null : saucerNear(k.x, k.z, 1.05);
+  if (sc) { const p = nearestFree(sc.x, sc.z, k, 0.74); x1 = p[0]; z1 = p[1]; }
+  if (o.to) { x1 = o.to[0]; z1 = o.to[1]; }
+  k.air = { t: 0, T, H, vy, y0: k.rootY, x1, z1, sauc: sc, seatMode: k.seated, cause: o.cause || 'trace', tag: o.tag || 0, thrown: !direct, ribbon: false, peakY: 0, from: o.from ? o.from.id : -1, throwDir: o.dirX || 0 };
+  k.state = 'air'; k.pending = null; k.settleT = 0; k.queued = false;
+  k.swing = 1; k.excitedT = 0;
+  if (o.dirX) k.lastDir = o.dirX;
+  // the weight leaves the cloth: balls in this kid's bowl flow downhill to the next low place
+  if (o.cause !== 'reposition') flowBallsFrom(k);
+  clothImpulse(k.x, k.z, 0.2, -0.6 - H * 0.8);
+  if (k.seated) AudioFX.seatBoing(H); else AudioFX.boing(clamp(o.depth != null ? o.depth : H, 0, 1), clamp(H / 0.85, 0, 1));
+  emitLint(k.x, clothH(k.x, k.z), k.z, 4 + Math.round(H * 6), 0.6);
+  Game.stats.launches++;
+  if (o.cause === 'chain') Game.stats.chainLaunches++;
+  logEv('launch', { kid: k.id, H: +H.toFixed(2), cause: k.air.cause, seat: k.seated, tag: k.air.tag, sauc: !!sc, holding: k.holding });
+}
+function absorbInto(k, sc, why) {
+  const p = nearestFree(sc.x, sc.z, k, 0.74);
+  k.seatTo = p; k.seated = true; k.baseX = p[0]; k.baseZ = p[1];
+  if (sc.occ.indexOf(k.id) < 0) sc.occ.push(k.id);
+  if (sc.occ.length >= sc.cap) { sc.used = true; sc.age = Math.max(sc.age, sc.life - 1.4); }
+  k.crouchV += 1.5; k.happyT = 1.4; k.settleT = 0; k.pending = null; k.queued = false;
+  AudioFX.softLand();
+  emitLint(k.x, clothH(k.x, k.z), k.z, 5, 0.35);
+  Game.stats.absorbs++;
+  Game.packets.forEach(pk => { if (pk.to === k) pk.dead = true; });
+  logEv('absorb', { kid: k.id, why, x: +p[0].toFixed(2), z: +p[1].toFixed(2) });
+  if (k.id === 0) Game.ribbon.up = Math.max(Game.ribbon.up, 0.01);
+  scheduleSave();
+}
+function land(k) {
+  const a = k.air;
+  k.state = 'ground'; k.air = null; k.groundT = 0; k.landT = Game.t;
+  k.rootY = clothH(k.x, k.z);
+  const E = a.H;
+  Game.lastLandT = Game.t;
+  let sc = saucerAt(k.x, k.z, 1.2);
+  if (sc && !saucerTakes(sc, k)) sc = null;
+  if (!sc && a.sauc && saucerTakes(a.sauc, k)) sc = a.sauc;
+  if (sc) {
+    clothImpulse(k.x, k.z, 0.35, 0.5 + E * 0.6);
+    if (Game.kids.some(o => o !== k && (o.state === 'air' || o.pending))) Game.stats.chainAbsorbs++;
+    absorbInto(k, sc, 'landing');
+    logEv('land', { kid: k.id, E: +E.toFixed(2), absorbed: true });
+    return;
+  }
+  if (a.seatMode) k.seated = true;
+  clothImpulse(k.x, k.z, k.seated ? 0.24 : 0.17, 0.7 + E * 1.7);
+  k.crouchV += 2.4 + E * 3.2;
+  k.settleT = 0.7;
+  AudioFX.thud(clamp(E / 0.85, 0, 1));
+  emitLint(k.x, clothH(k.x, k.z), k.z, 6 + Math.round(E * 10), 0.9);
+  logEv('land', { kid: k.id, E: +E.toFixed(2), absorbed: false });
+  if (a.cause !== 'reposition') sendChain(k, E, a.from);
+  if (k.queuedH) { const h = k.queuedH; k.queuedH = 0; k.groundT = 0.31; launch(k, h, { cause: 'boost' }); }
+}
+
+// ===================================================================
+//  Balls
+// ===================================================================
+function makeBall(i, x, z) {
+  return { i, x, z, y: 0, vx: 0, vz: 0, vy: 0, r: 0.105, state: 'cloth', owner: -1, fly: null, col: BALL_COLS[i], rot: M4.create(), restT: 1, flowT: 0, flowTo: null, flowFrom: -1, carry: 0, hop: 0, pick: 0, attract: 0 };
+}
+function anchoredBall(b) {
+  return Game.kids.some(k => k.seated && k.state === 'ground' && Math.hypot(k.x - b.x, k.z + 0.04 - b.z) < 0.4);
+}
+function flowBallsFrom(k) {
+  const near = k.seated ? 0.6 : 0.45;
+  let tgt = null, bd = 1e9;
+  Game.kids.forEach(o => { if (o !== k && o.seated && o.state === 'ground') { const d = Math.hypot(o.x - k.x, o.z - k.z) + (o.holding >= 0 ? 1.5 : 0); if (d < bd) { bd = d; tgt = [o.x, o.z + 0.06, o.id]; } } });
+  if (!tgt) { const s = Game.saucers.find(s => saucerAlive(s) && !s.used); if (s) tgt = [s.x, s.z, -1]; }
+  let moved = 0;
+  Game.balls.forEach(b => {
+    if (b.state !== 'cloth' || b.pick) return;
+    const d = Math.hypot(b.x - k.x, b.z - k.z);
+    if (d > near) return;
+    let ux, uz;
+    if (tgt) { ux = tgt[0] - b.x; uz = tgt[1] - b.z; } else { ux = b.x - k.x || 0.1; uz = b.z - k.z; }
+    const l = Math.hypot(ux, uz) || 1;
+    const sp = tgt ? clamp(0.8 + l * 0.45, 0.9, 1.8) : 0.8;
+    b.vx = ux / l * sp; b.vz = uz / l * sp; b.vy = 0.9; b.hop = 1;
+    b.flowT = tgt ? 3.0 : 0.8; b.flowTo = tgt; b.flowFrom = k.id; b.restT = 0;
+    moved++;
+  });
+  if (moved) { Game.stats.flows++; logEv('flow', { from: k.id, to: tgt ? tgt[2] : -1, n: moved }); }
+}
+function updateBalls(dt) {
+  const tr = Game.trace;
+  Game.balls.forEach(b => {
+    if (b.state === 'held') {
+      const k = Game.kids[b.owner];
+      if (k && k.J) { const p = k.J.ball; b.x = p[0]; b.y = p[1]; b.z = p[2]; }
+      return;
+    }
+    if (b.state === 'fly') {
+      const f = b.fly; f.t += dt;
+      const u = clamp(f.t / f.T, 0, 1);
+      const rk = Game.kids[f.to];
+      const tgt = rk && rk.J ? V.lerp(rk.J.arms[0].hand, rk.J.arms[1].hand, 0.5) : f.p1;
+      f.p1 = V.lerp(f.p1, tgt, clamp(dt * 6, 0, 1));
+      const p = V.lerp(f.p0, f.p1, u);
+      p[1] += Math.sin(u * PI) * f.arc;
+      b.x = p[0]; b.y = p[1]; b.z = p[2];
+      spinBall(b, 0.08, f.p1[0] - f.p0[0], f.p1[2] - f.p0[2]);
+      if (u >= 1) catchBall(b, rk);
+      return;
+    }
+    if (b.pick > 0) return; // being picked up (animated by kid)
+    const sl = clothSlope(b.x, b.z);
+    let ax = -sl[0] * 6.5, az = -sl[1] * 6.5;
+    // the rim is raised a little so balls never strand against the pads
+    const ex = BALL_X - Math.abs(b.x), ez = BALL_Z - Math.abs(b.z);
+    if (ex < 0.12) ax -= Math.sign(b.x) * (0.12 - ex) * 4;
+    if (ez < 0.1) az -= Math.sign(b.z) * (0.1 - ez) * 4;
+    // follow the pressed dent under the finger (free balls only)
+    b.attract = 0;
+    if (tr && tr.active && tr.snapped && !anchoredBall(b)) {
+      const dx = tr.x - b.x, dz = tr.z - b.z, d = Math.hypot(dx, dz);
+      if (d < 0.48 && d > 0.02) {
+        const pull = (1 - d / 0.48) * 10;
+        ax += dx / d * pull; az += dz / d * pull;
+        b.carry += Math.hypot(b.vx, b.vz) * dt;
+        b.restT = 0; b.attract = 1; b.carryT = Game.t;
+      }
+    }
+    if (b.flowT > 0 && b.flowTo) {
+      b.flowT -= dt;
+      const dx = b.flowTo[0] - b.x, dz = b.flowTo[1] - b.z, d = Math.hypot(dx, dz);
+      if (d > 0.3) { ax += dx / d * 1.7; az += dz / d * 1.7; }
+      else if (b.flowFrom >= 0 || b.deliverTo != null) {
+        if (b.flowTo[2] >= 0 && b.flowTo[2] !== b.flowFrom && b.flowFrom >= 0) { Game.stats.flowArrivals++; logEv('flowArrive', { ball: b.i, to: b.flowTo[2], from: b.flowFrom }); AudioFX.plop(); }
+        b.flowFrom = -1; b.flowT = 0; b.deliverTo = null;
+      }
+    } else if (b.restT > 12 && !anchoredBall(b)) {
+      // a long-forgotten ball drifts very slowly toward a seated, empty-handed kid
+      const k = Game.kids.filter(k => k.seated && k.holding < 0 && k.state === 'ground').sort((p, q) => Math.hypot(p.x - b.x, p.z - b.z) - Math.hypot(q.x - b.x, q.z - b.z))[0];
+      if (k) { const dx = k.x - b.x, dz = k.z - b.z, d = Math.hypot(dx, dz) || 1; b.x += dx / d * 0.06 * dt; b.z += dz / d * 0.06 * dt; }
+    }
+    b.vx += ax * dt; b.vz += az * dt;
+    const fr = Math.exp(-(b.flowT > 0 ? 0.6 : (b.attract ? 1.1 : 2.4)) * dt);
+    b.vx *= fr; b.vz *= fr;
+    const sp = Math.hypot(b.vx, b.vz), slm = Math.hypot(sl[0], sl[1]);
+    // a ball sits in its own little dent: it only starts rolling on a real slope
+    // passing waves don't dislodge it: the slope has to last
+    const resting = b.restT > 0.05;
+    if (resting && slm > 0.075) b.slopeT = (b.slopeT || 0) + dt; else b.slopeT = 0;
+    const hold = resting ? (b.slopeT < 0.32) : (slm < 0.06);
+    if (b.flowT <= 0 && sp < 0.08 && hold && !b.attract) { b.vx = 0; b.vz = 0; b.restT += dt; } else if (sp > 0.08) b.restT = 0;
+    const nx = b.x + b.vx * dt, nz = b.z + b.vz * dt;
+    spinBall(b, Math.hypot(nx - b.x, nz - b.z) / b.r, b.vx, b.vz);
+    b.x = nx; b.z = nz;
+    if (b.x > BALL_X) { b.x = BALL_X; b.vx = -Math.abs(b.vx) * 0.5; } if (b.x < -BALL_X) { b.x = -BALL_X; b.vx = Math.abs(b.vx) * 0.5; }
+    if (b.z > BALL_Z) { b.z = BALL_Z; b.vz = -Math.abs(b.vz) * 0.5; } if (b.z < -BALL_Z) { b.z = -BALL_Z; b.vz = Math.abs(b.vz) * 0.5; }
+    // kids are obstacles
+    Game.kids.forEach(k => {
+      if (k.state === 'air' && k.rootY - clothH(k.x, k.z) > 0.3) return;
+      const rr = (k.seated ? 0.19 : 0.12) + b.r;
+      const dx = b.x - k.x, dz = b.z - (k.z + (k.seated ? 0.04 : 0)), d = Math.hypot(dx, dz);
+      if (d < rr && d > 1e-4) { const push = (rr - d); b.x += dx / d * push; b.z += dz / d * push; const vn = (b.vx * dx + b.vz * dz) / d; if (vn < 0) { b.vx -= vn * dx / d * 1.3; b.vz -= vn * dz / d * 1.3; } }
+    });
+    Game.balls.forEach(o => {
+      if (o === b || o.state !== 'cloth' || o.i < b.i || o.pick) return;
+      const dx = o.x - b.x, dz = o.z - b.z, d = Math.hypot(dx, dz), rr = b.r + o.r;
+      if (d < rr && d > 1e-4) { const push = (rr - d) * 0.5; b.x -= dx / d * push; b.z -= dz / d * push; o.x += dx / d * push; o.z += dz / d * push; }
+    });
+    // vertical: sit on cloth, small hops when the cloth springs up
+    const ch = clothH(b.x, b.z) + b.r * 0.92;
+    const cv = clothV(b.x, b.z);
+    if (b.hop > 0 || b.y > ch + 0.002) {
+      b.vy -= 9.8 * dt; b.y += b.vy * dt;
+      if (b.y <= ch) { b.y = ch; if (b.vy < -0.6) { b.vy = -b.vy * 0.35; } else { b.vy = 0; b.hop = 0; } }
+    } else {
+      b.y = ch;
+      if (cv > 0.9) { b.vy = cv * 0.6; b.hop = 1; b.y += 0.001; }
+    }
+    // a seated kid without a ball picks up one that comes to her
+    if (sp < 0.4 && b.hop === 0 && !b.attract) {
+      for (const k of Game.kids) {
+        if (!k.seated || k.state !== 'ground' || k.holding >= 0 || k.pickBall >= 0 || k.sitAmt < 0.8) continue;
+        if (Game.balls.some(o => o.state === 'fly' && o.fly.to === k.id)) continue;
+        // until a ball has been thrown and caught this round, the third child waits with open hands
+        if ((Game.cyclePasses || 0) < 1 && Game.kids.filter(o => o.holding >= 0 || o.pickBall >= 0).length >= 2) continue;
+        if (Math.hypot(b.x - k.x, b.z - (k.z + 0.06)) < 0.45) { startPick(k, b); break; }
+      }
+    }
+  });
+}
+const _spinR = new Float32Array(16), _spinO = new Float32Array(16);
+function spinBall(b, ang, vx, vz) {
+  if (ang < 1e-5) return;
+  const l = Math.hypot(vx, vz); if (l < 1e-6) return;
+  const x = vz / l, y = 0, z = -vx / l;
+  const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
+  const R = _spinR;
+  R[0] = t * x * x + c; R[1] = t * x * y + s * z; R[2] = t * x * z - s * y; R[3] = 0;
+  R[4] = t * x * y - s * z; R[5] = t * y * y + c; R[6] = t * y * z + s * x; R[7] = 0;
+  R[8] = t * x * z + s * y; R[9] = t * y * z - s * x; R[10] = t * z * z + c; R[11] = 0;
+  R[12] = 0; R[13] = 0; R[14] = 0; R[15] = 1;
+  M4.mul(_spinO, R, b.rot);
+  const cx = V.norm([_spinO[0], _spinO[1], _spinO[2]]); let cy = [_spinO[4], _spinO[5], _spinO[6]];
+  cy = V.norm(V.sub(cy, V.scale(cx, V.dot(cx, cy)))); const cz = V.cross(cx, cy);
+  M4.basis(b.rot, cx, cy, cz, [0, 0, 0]);
+}
+function startPick(k, b) {
+  k.pickBall = b.i; k.pickT = 0; b.pick = 1; b.vx = b.vz = 0;
+  b.pickFrom = [b.x, b.y, b.z];
+  k.happyT = 1.2; k.lookOverride = [b.x, b.y, b.z]; k.lookT = 0.6;
+}
+function finishPick(k) {
+  const b = Game.balls[k.pickBall];
+  k.pickBall = -1;
+  if (!b) return;
+  b.pick = 0;
+  if (k.holding >= 0) { b.state = 'cloth'; b.vx = b.vz = 0; b.hop = 1; b.vy = 0.2; return; } // arms already full
+  b.state = 'held'; b.owner = k.id; k.holding = b.i;
+  AudioFX.pickBall();
+  Game.stats.pickups++;
+  if ((b.carryT != null && Game.t - b.carryT < 4) || b.deliverTo === k.id) { Game.stats.deliveries++; logEv('delivered', { ball: b.i, kid: k.id }); }
+  b.carry = 0; b.deliverTo = null;
+  logEv('pick', { kid: k.id, ball: b.i });
+  scheduleSave();
+}
+function pickPartner(k) {
+  let best = null, bs = 1e9;
+  Game.kids.forEach(o => {
+    if (o === k || o.holding >= 0 || o.pickBall >= 0 || !o.seated) return; // only seated, empty-handed children catch
+    if (Game.balls.some(b => b.state === 'fly' && b.fly.to === o.id)) return;
+    const dx = o.x - k.x, d = Math.hypot(dx, o.z - k.z);
+    let s = d;
+    if (k.lastDir && Math.sign(dx) === Math.sign(k.lastDir)) s -= 0.5;
+    if (s < bs) { bs = s; best = o; }
+  });
+  return best;
+}
+function throwBall(k) {
+  const b = Game.balls[k.holding];
+  if (!b) return false;
+  let rk = k.partner >= 0 ? Game.kids[k.partner] : null;
+  if (!rk || rk.holding >= 0 || rk.pickBall >= 0 || Game.balls.some(o => o.state === 'fly' && o.fly.to === rk.id)) rk = pickPartner(k);
+  if (!rk) return false;
+  const p0 = k.J ? k.J.ball.slice() : [k.x, k.rootY + 0.8, k.z];
+  const p1 = rk.J ? V.lerp(rk.J.arms[0].hand, rk.J.arms[1].hand, 0.5) : [rk.x, 0.8, rk.z];
+  const d = V.dist(p0, p1);
+  b.state = 'fly'; b.owner = -1;
+  b.fly = { t: 0, T: 0.55 + d * 0.13, p0, p1, arc: 0.35 + d * 0.12, to: rk.id, from: k.id };
+  k.holding = -1; k.throwT = 0.01;
+  rk.excitedT = 1.0;
+  AudioFX.throwBall();
+  Game.stats.throws++;
+  logEv('throw', { from: k.id, to: rk.id, ball: b.i });
+  return true;
+}
+function catchBall(b, rk) {
+  if (!rk || rk.holding >= 0 || rk.pickBall >= 0) {
+    b.state = 'cloth'; b.fly = null; b.vx = b.vz = 0; b.vy = 0; b.hop = 1; b.owner = -1;
+    return;
+  }
+  b.state = 'held'; b.owner = rk.id; rk.holding = b.i; b.fly = null;
+  rk.happyT = 1.6; rk.crouchV += 0.8;
+  AudioFX.catchBall();
+  emitSpark(b.x, b.y, b.z, b.col, 8);
+  Game.stats.passes++;
+  Game.cyclePasses = (Game.cyclePasses || 0) + 1;
+  logEv('catch', { kid: rk.id, ball: b.i });
+  scheduleSave();
+}
+
+// ===================================================================
+//  Ribbon (verlet strip hanging from a ring on a rope; rolls up while she sits)
+// ===================================================================
+function makeRibbon(x) {
+  const n = 10, seg = (3.05 - RIBBON_TIP) / (n - 1);
+  const pts = [];
+  for (let i = 0; i < n; i++) pts.push({ p: [x, 3.05 - i * seg, KID_Z], o: [x, 3.05 - i * seg, KID_Z] });
+  return { x, tx: x, pts, seg0: seg, seg, twist: 0, touchT: 9, glow: 0, up: 0 };
+}
+function updateRibbon(dt) {
+  const R = Game.ribbon;
+  const g = Game.kids[0];
+  const wantUp = g && g.seated ? 1 : 0;
+  R.up = damp(R.up, wantUp, wantUp ? 1.6 : 2.2, dt);
+  R.seg = lerp(R.seg0, 0.025, R.up);
+  R.x = damp(R.x, R.tx, 1.4, dt);
+  const pts = R.pts;
+  pts[0].p = [R.x, 3.05, KID_Z];
+  const wind = Math.sin(Game.t * 0.7) * 0.03 + Math.sin(Game.t * 1.9) * 0.015;
+  for (let i = 1; i < pts.length; i++) {
+    const q = pts[i];
+    const vx = (q.p[0] - q.o[0]) * 0.985, vy = (q.p[1] - q.o[1]) * 0.985, vz = (q.p[2] - q.o[2]) * 0.985;
+    q.o = q.p.slice();
+    q.p = [q.p[0] + vx + wind * dt * dt * 6, q.p[1] + vy - 9.8 * dt * dt, q.p[2] + vz + wind * 0.5 * dt * dt * 4];
+  }
+  for (let it = 0; it < 4; it++) {
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1].p, b = pts[i].p;
+      const d = V.sub(b, a); const l = V.len(d) || 1; const diff = (l - R.seg) / l;
+      if (i === 1) { pts[i].p = V.sub(b, V.scale(d, diff)); }
+      else { pts[i - 1].p = V.add(a, V.scale(d, diff * 0.5)); pts[i].p = V.sub(b, V.scale(d, diff * 0.5)); }
+    }
+  }
+  R.twist += dt * 0.6;
+  R.touchT += dt;
+  R.glow = Math.max(0, R.glow - dt * 1.2);
+}
+function ribbonPoke(hand, vel, strong) {
+  const R = Game.ribbon;
+  R.pts.forEach((q) => {
+    const d = V.dist(q.p, hand);
+    if (d < 0.35) { const f = (1 - d / 0.35) * (strong ? 0.05 : 0.015); q.o = V.sub(q.o, V.scale(V.norm(vel), f)); }
+  });
+}
+function checkRibbon(k) {
+  const a = k.air; if (!a || a.ribbon || k.holding >= 0 || Game.ribbon.up > 0.3) return;
+  const R = Game.ribbon;
+  const tip = R.pts[R.pts.length - 1].p;
+  for (const arm of k.J.arms) {
+    const h = arm.hand;
+    {
+      const q = tip;
+      if (h[1] >= RIBBON_TIP - 0.03 && Math.hypot(h[0] - R.x, h[2] - KID_Z) < 0.32) {
+        a.ribbon = true;
+        ribbonPoke(h, [0.3 * arm.sd, 1, 0.2], true);
+        R.touchT = 0; R.glow = 1;
+        AudioFX.ribbon();
+        emitSpark(q[0], q[1], q[2], hex(0xffe08a), 16);
+        k.happyT = 2.2;
+        Game.stats.ribbon++;
+        logEv('ribbon', { kid: k.id });
+        return;
+      }
+    }
+  }
+}
+
+// ===================================================================
+//  Particles (fibre lint, sparkles) — capped
+// ===================================================================
+const MAX_PARTS = 120;
+function emitLint(x, y, z, n, spread) {
+  for (let i = 0; i < n; i++) {
+    if (Game.parts.length >= MAX_PARTS) Game.parts.shift();
+    const a = rnd() * TAU, r = rnd() * 0.25 * spread;
+    Game.parts.push({ p: [x + Math.cos(a) * r, y + 0.02, z + Math.sin(a) * r], v: [Math.cos(a) * 0.25 * spread * rnd(), 0.25 + rnd() * 0.5 * spread, Math.sin(a) * 0.25 * spread * rnd()], life: 0, max: 1.2 + rnd() * 1.4, size: 0.012 + rnd() * 0.01, col: rnd() < 0.5 ? [0.75, 0.82, 1.0] : [0.55, 0.62, 0.95], drag: 2.2, g: -0.12 });
+  }
+}
+function emitSpark(x, y, z, col, n) {
+  for (let i = 0; i < n; i++) {
+    if (Game.parts.length >= MAX_PARTS) Game.parts.shift();
+    const a = rnd() * TAU, e = rnd() * PI - PI / 2;
+    const sp = 0.6 + rnd() * 0.9;
+    Game.parts.push({ p: [x, y, z], v: [Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp + 0.4, Math.sin(a) * Math.cos(e) * sp], life: 0, max: 0.6 + rnd() * 0.6, size: 0.03 + rnd() * 0.025, col: V.scale(col, 2.2), drag: 3.0, g: -1.0 });
+  }
+}
+function updateParts(dt) {
+  for (const q of Game.parts) {
+    q.life += dt;
+    const dr = Math.exp(-q.drag * dt);
+    q.v[0] *= dr; q.v[1] = q.v[1] * dr + q.g * dt; q.v[2] *= dr;
+    q.p[0] += q.v[0] * dt; q.p[1] += q.v[1] * dt; q.p[2] += q.v[2] * dt;
+  }
+  Game.parts = Game.parts.filter(q => q.life < q.max);
+}
+// ===================================================================
+//  Camera
+// ===================================================================
+const Cam = { W: 1, H: 1, fov: 0.8, pitch: 0.7, eye: [0, 3, 5], target: [0, 0, 0], f: [0, 0, -1], r: [1, 0, 0], u: [0, 1, 0],
+  view: M4.create(), proj: M4.create(), vp: M4.create(), frames: null, cur: null, safe: { l: 0, t: 0, r: 0, b: 0 }, refitT: 0, inputVP: null };
+function camBasis(pitch, yaw) {
+  yaw = yaw || 0;
+  const f = rotY([0, -Math.sin(pitch), -Math.cos(pitch)], yaw);
+  const r = rotY([1, 0, 0], yaw);
+  let u = V.cross(r, f); if (u[1] < 0) u = V.scale(u, -1);
+  return { f, r, u };
+}
+// portrait screens look along the row of children (they then stand one behind another, larger on screen)
+const camYawFor = (aspect) => aspect < 0.8 ? PI / 2 - 0.42 : 0;
+function angDiff(a, b) { let d = a - b; while (d > PI) d -= TAU; while (d < -PI) d += TAU; return d; }
+function fitFrame(points, pitch, fov, aspect, rect, yaw) {
+  const B = camBasis(pitch, yaw);
+  const tv = Math.tan(fov / 2), th = tv * aspect;
+  let T = [0, 0.5, 0], d = 8;
+  const proj = (p, T, d) => {
+    const E = V.sub(T, V.scale(B.f, d));
+    const rel = V.sub(p, E);
+    const zc = V.dot(rel, B.f);
+    return [V.dot(rel, B.r) / (zc * th), V.dot(rel, B.u) / (zc * tv), zc];
+  };
+  for (let it = 0; it < 5; it++) {
+    let lo = 0.8, hi = 60;
+    for (let s = 0; s < 30; s++) {
+      const mid = (lo + hi) / 2;
+      let ok = true;
+      for (const p of points) {
+        const q = proj(p, T, mid);
+        if (q[2] < 0.3 || q[0] < rect.l || q[0] > rect.r || q[1] < rect.b || q[1] > rect.t) { ok = false; break; }
+      }
+      if (ok) hi = mid; else lo = mid;
+    }
+    d = hi;
+    let x0 = 9, x1 = -9, y0 = 9, y1 = -9, zs = 0;
+    points.forEach(p => { const q = proj(p, T, d); x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); zs += q[2]; });
+    zs /= points.length;
+    const cx = (x0 + x1) / 2 - (rect.l + rect.r) / 2, cy = (y0 + y1) / 2 - (rect.t + rect.b) / 2;
+    T = V.add(T, V.add(V.scale(B.r, cx * zs * th), V.scale(B.u, cy * zs * tv)));
+  }
+  return { T, d, B, proj };
+}
+function computeFrames() {
+  const W = Cam.W, H = Cam.H, aspect = W / H;
+  const s = Cam.safe;
+  const m = 0.03;
+  const rect = { l: -1 + 2 * s.l / W + m, r: 1 - 2 * s.r / W - m, t: 1 - 2 * s.t / H - m, b: -1 + 2 * s.b / H + m };
+  const yaw = camYawFor(aspect);
+  const side = yaw !== 0;
+  const pitch = side ? 0.9 : 0.6;
+  const fov = side ? 0.86 : 0.66;
+  const base = [];
+  const R = Game.ribbon;
+  const rx = R ? R.tx : 0;
+  base.push([rx, RIBBON_TIP + 0.42, KID_Z], [rx, RIBBON_TIP - 0.05, KID_Z]);
+  { const g = Game.kids[0]; if (g && !g.seated) base.push([g.baseX, RIBBON_TIP + 0.55, g.baseZ]); } // head room for the jump
+  Game.kids.forEach(k => {
+    const ux = k.state === 'ground' ? k.x : k.baseX, uz = k.state === 'ground' ? k.z : k.baseZ;
+    base.push([ux - 0.3, 0, uz], [ux + 0.3, 0, uz], [ux, k.seated ? 0.8 : 1.24, uz], [ux, 0, uz + 0.36]);
+  });
+  Game.balls.forEach(b => { if (b.state === 'cloth') base.push([b.x - 0.13, 0.1, b.z], [b.x + 0.13, 0.1, b.z], [b.x, 0.1, b.z - 0.13], [b.x, 0.1, b.z + 0.13]); });
+  if (!side) base.push([-1.4, 0, SZ[2]], [1.4, 0, SZ[2]], [0, 0.07, PAD.oz - 0.1]);
+  else base.push([1.5, 0, SZ[2]], [-1.5, 0, SZ[0]], [PAD.ox - 0.15, 0.07, 0]);
+  const wide = base.concat([[-PAD.ox, 0.06, PAD.oz], [PAD.ox, 0.06, PAD.oz], [-PAD.ox, 0.06, -PAD.oz], [PAD.ox, 0.06, -PAD.oz], [-PAD.ox, FLOOR_Y, PAD.oz], [PAD.ox, FLOOR_Y, PAD.oz]]);
+  const mk = (pts, pitchAdd) => {
+    const fr = fitFrame(pts, pitch + pitchAdd, fov, aspect, rect, yaw);
+    const g = Game.kids[0];
+    const seamP = [g ? g.baseX : 0, 0, SZ[1]];
+    let T = fr.T;
+    for (let it = 0; it < 3; it++) {
+      let y0 = 9, y1 = -9;
+      pts.forEach(p => { const q = fr.proj(p, T, fr.d); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); });
+      const qs = fr.proj(seamP, T, fr.d);
+      const cy = (rect.t + rect.b) / 2;
+      let sh = clamp(cy - qs[1], rect.b - y0, rect.t - y1);
+      T = V.sub(T, V.scale(fr.B.u, sh * qs[2] * Math.tan(fov / 2)));
+    }
+    return { T, d: fr.d, pitch: pitch + pitchAdd, fov, yaw };
+  };
+  const narrow = mk(base, 0);
+  const wideF = mk(wide, 0.03);
+  // widen only "a little": never more than ~22% further than the narrow framing
+  wideF.d = Math.min(wideF.d, narrow.d * 1.22);
+  return { narrow, wide: wideF };
+}
+function updateCamera(dt, force) {
+  Cam.refitT -= dt;
+  const pressing = Game.trace && Game.trace.active;
+  if (!Cam.frames || force || (Cam.refitT <= 0 && !pressing)) { Cam.frames = computeFrames(); Cam.refitT = 0.6; }
+  const e = Game.reveal; const t = e * e * (3 - 2 * e);
+  const A = Cam.frames.narrow, B = Cam.frames.wide;
+  const tgt = { T: V.lerp(A.T, B.T, t), d: lerp(A.d, B.d, t), pitch: lerp(A.pitch, B.pitch, t), fov: lerp(A.fov, B.fov, t), yaw: A.yaw };
+  if (!Cam.cur || force || Cam.cur.yaw !== tgt.yaw) Cam.cur = { T: tgt.T.slice(), d: tgt.d, pitch: tgt.pitch, fov: tgt.fov, yaw: tgt.yaw };
+  const c = Cam.cur;
+  if (!pressing || force) {
+    const rate = force ? 100 : 2.6;
+    c.T = V.lerp(c.T, tgt.T, 1 - Math.exp(-rate * dt)); c.d = damp(c.d, tgt.d, rate, dt); c.pitch = damp(c.pitch, tgt.pitch, rate, dt); c.fov = damp(c.fov, tgt.fov, rate, dt);
+  }
+  const B2 = camBasis(c.pitch, c.yaw);
+  Cam.f = B2.f; Cam.r = B2.r; Cam.u = B2.u; Cam.fov = c.fov; Cam.pitch = c.pitch; Cam.yaw = c.yaw;
+  Cam.lk = V.norm(rotY([0.15, 0.85, 0.5], c.yaw));
+  Cam.eye = V.sub(c.T, V.scale(B2.f, c.d)); Cam.target = c.T;
+  M4.persp(Cam.proj, c.fov, Cam.W / Cam.H, 0.1, 60);
+  M4.lookAt(Cam.view, Cam.eye, c.T, [0, 1, 0]);
+  M4.mul(Cam.vp, Cam.proj, Cam.view);
+}
+function project(p) {
+  const q = M4.xform(Cam.vp, p);
+  return [(q[0] * 0.5 + 0.5) * Cam.W, (0.5 - q[1] * 0.5) * Cam.H, q[3]];
+}
+function screenRay(sx, sy) {
+  const nx = sx / Cam.W * 2 - 1, ny = 1 - sy / Cam.H * 2;
+  const tv = Math.tan(Cam.fov / 2), th = tv * Cam.W / Cam.H;
+  return V.norm(V.add(Cam.f, V.add(V.scale(Cam.r, nx * th), V.scale(Cam.u, ny * tv))));
+}
+function rayPlane(sx, sy, y) {
+  const d = screenRay(sx, sy);
+  if (Math.abs(d[1]) < 1e-5) return null;
+  const t = (y - Cam.eye[1]) / d[1];
+  if (t < 0) return null;
+  return V.add(Cam.eye, V.scale(d, t));
+}
+function pxPerMeterAt(x, z) {
+  const a = project([x - 0.05, 0, z]), b = project([x + 0.05, 0, z]);
+  const c = project([x, 0, z - 0.05]), d = project([x, 0, z + 0.05]);
+  return Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]), Math.hypot(d[0] - c[0], d[1] - c[1])) * 10;
+}
+
+// ===================================================================
+//  Input: snap to seams, trace
+// ===================================================================
+function seamTol(s, t, ppm) {
+  const inv = Game.invite;
+  const isInv = inv && inv.seam === s && t >= inv.a - 0.25 && t <= inv.b + 0.25;
+  return isInv ? clamp(ppm * 0.28, 32, 52) : clamp(ppm * 0.17, 24, 38);
+}
+function snapSeam(sx, sy, prefer) {
+  const hit = rayPlane(sx, sy, 0);
+  if (!hit) return null;
+  let best = null;
+  for (const s of SEAMS) {
+    const t = seamParam(s, hit[0], hit[2]);
+    const p = seamPoint(s, t);
+    const outside = s.axis === 0 ? (hit[0] < s.a - 0.15 || hit[0] > s.b + 0.15) : (hit[2] < s.a - 0.15 || hit[2] > s.b + 0.15);
+    if (outside) continue;
+    const sp = project([p[0], 0, p[1]]);
+    const dpx = Math.hypot(sp[0] - sx, sp[1] - sy);
+    const ppm = pxPerMeterAt(p[0], p[1]);
+    let tol = seamTol(s, t, ppm);
+    if (prefer === s) tol = Math.max(tol, clamp(ppm * 0.28, 32, 52)) * 1.35;
+    let score = dpx / tol;
+    if (prefer && s === prefer) score *= 0.6;
+    if (dpx <= tol && (!best || score < best.score)) best = { s, t, x: p[0], z: p[1], dpx, score };
+  }
+  return best;
+}
+// kid silhouettes: legs map to the seam at her feet; upper body is a small reaction
+function hitKid(sx, sy) {
+  let best = null;
+  for (const k of Game.kids) {
+    if (!k.J) continue;
+    const ppm = pxPerMeterAt(k.x, k.z);
+    const hp = project(k.J.head), cp = project(k.J.chest), pp = project(k.J.pelvis);
+    const l0 = project(k.J.legs[0].knee), l1 = project(k.J.legs[1].knee), a0 = project(k.J.legs[0].ankle), a1 = project(k.J.legs[1].ankle);
+    const dU = Math.min(Math.hypot(hp[0] - sx, hp[1] - sy) / (ppm * 0.12), Math.hypot(cp[0] - sx, cp[1] - sy) / (ppm * 0.13));
+    const dL = Math.min(Math.hypot(pp[0] - sx, pp[1] - sy) / (ppm * 0.13), Math.hypot(l0[0] - sx, l0[1] - sy) / (ppm * 0.09), Math.hypot(l1[0] - sx, l1[1] - sy) / (ppm * 0.09), Math.hypot(a0[0] - sx, a0[1] - sy) / (ppm * 0.09), Math.hypot(a1[0] - sx, a1[1] - sy) / (ppm * 0.09));
+    const d = Math.min(dU, dL);
+    if (d < 1 && (!best || d < best.d)) best = { k, d, legs: dL <= dU, z: pp[2] };
+  }
+  return best;
+}
+function footSnapFor(k) {
+  const s = nearestHSeamFor(k.z + 0.22);
+  const t = seamParam(s, k.x, s.c);
+  const p = seamPoint(s, t);
+  return { s, t, x: p[0], z: p[1], dpx: 0, score: 0 };
+}
+function markBins(tr, s, t0, t1) {
+  const step = BIN * 0.5;
+  const n = Math.max(1, Math.ceil(Math.abs(t1 - t0) / step));
+  for (let i = 0; i <= n; i++) {
+    const t = lerp(t0, t1, i / n);
+    const bi = binAt(s, t);
+    if (!tr.covered.has(bi)) { tr.covered.add(bi); tr.binT.set(bi, Game.t); tr.lastNewT = Game.t; }
+  }
+  if (s.axis === 0) {
+    const mm = tr.hx[s.id] || [9, -9];
+    mm[0] = Math.min(mm[0], t0, t1); mm[1] = Math.max(mm[1], t0, t1);
+    tr.hx[s.id] = mm;
+    for (let b = 0; b < 2; b++) if (!tr.crossed[b] && mm[0] < BOUNDS[b] - 0.06 && mm[1] > BOUNDS[b] + 0.06) { tr.crossed[b] = true; onCross(b); }
+  } else if (s.boundary) {
+    const b = s.c < 0 ? 0 : 1;
+    tr.along[b] += Math.abs(t1 - t0);
+    if (!tr.crossed[b] && tr.along[b] > 0.3) { tr.crossed[b] = true; onCross(b); }
+  }
+}
+function onCross(b) {
+  Cl.linkBase[b] = 0.75; Cl.link[b] = 1.0; Cl.linkHold[b] = 5.0; clothApplyLinks();
+  Cl.boost = Math.max(Cl.boost, 2.5);
+  Game.stats.crossings++;
+  if (!Game.revealed) Game.revealPending = true;
+  AudioFX.linkOpen();
+  logEv('cross', { b });
+}
+function inputDown(sx, sy) {
+  Game.lastInput = Game.t; Game.demo.on = false;
+  Game.firstInputDone = true;
+  Game.hopsSinceInput = 0;
+  const hk = hitKid(sx, sy);
+  let sn = snapSeam(sx, sy, null);
+  if (hk && hk.legs && (!sn || sn.dpx > 12)) sn = footSnapFor(hk.k);
+  if (sn && !(hk && !hk.legs && sn.dpx > 14)) startTrace(sn, sx, sy);
+  else {
+    Game.trace = { active: true, snapped: false, pending: true, sx, sy, covered: new Set(), binT: new Map(), hx: {}, crossed: [false, false], along: [0, 0], startT: Game.t };
+    unrelatedTouch(sx, sy, hk ? hk.k : null);
+  }
+}
+function startTrace(sn, sx, sy) {
+  const tr = {
+    active: true, snapped: true, pending: false, seam: sn.s, t: sn.t, x: sn.x, z: sn.z, sx, sy,
+    covered: new Set(), binT: new Map(), hx: {}, crossed: [false, false], along: [0, 0], startT: Game.t, lastNewT: Game.t,
+    sx0: sn.x, sz0: sn.z, startNearKid: Game.kids.some(k => Math.hypot(k.x - sn.x, k.z - sn.z) < RANGE + 0.05),
+    dirX: 0, live: null, holdFired: false, wideNotified: false,
+  };
+  Game.trace = tr;
+  markBins(tr, sn.s, sn.t - 0.05, sn.t + 0.05);
+  clothImpulse(sn.x, sn.z, 0.12, 0.7);
+  // the nearest child always answers the touch with a knee bend
+  let nk = null, nd = 1e9;
+  Game.kids.forEach(k => { const d = Math.hypot(k.x - sn.x, k.z - sn.z); if (d < nd) { nd = d; nk = k; } });
+  if (nk && nd < 1.3 && nk.state === 'ground') { nk.minCrouch = Math.max(nk.minCrouch, 0.22 * (1 - nd / 1.3) + 0.08); nk.crouchV += 1.2; }
+  emitLint(sn.x, clothH(sn.x, sn.z), sn.z, 3, 0.3);
+  Game.stats.traces++;
+  Game.balls.forEach(b => { b.carry = 0; });
+  logEv('down', { seam: sn.s.id, x: +sn.x.toFixed(2), z: +sn.z.toFixed(2) });
+}
+function inputMove(sx, sy) {
+  const tr = Game.trace; if (!tr || !tr.active) return;
+  Game.lastInput = Game.t;
+  if (tr.pending) { const sn = snapSeam(sx, sy, null); if (sn) startTrace(sn, sx, sy); return; }
+  if (tr.holdFired) { // after an auto-release, a new gesture starts once the finger moves on
+    if (Math.hypot(sx - tr.sx, sy - tr.sy) > 40) { const sn = snapSeam(sx, sy, null); if (sn) startTrace(sn, sx, sy); }
+    return;
+  }
+  const sn = snapSeam(sx, sy, tr.seam);
+  const moved = Math.hypot(sx - tr.sx, sy - tr.sy);
+  tr.sx = sx; tr.sy = sy;
+  if (!sn) { tr.snapped = false; return; }
+  if (!tr.snapped) { tr.snapped = true; tr.seam = sn.s; tr.t = sn.t; tr.x = sn.x; tr.z = sn.z; markBins(tr, sn.s, sn.t, sn.t); return; }
+  if (sn.s !== tr.seam) {
+    const a = tr.seam, b = sn.s;
+    if (a.axis !== b.axis) {
+      const ix = a.axis === 0 ? b.c : a.c, iz = a.axis === 0 ? a.c : b.c;
+      markBins(tr, a, tr.t, seamParam(a, ix, iz));
+      markBins(tr, b, seamParam(b, ix, iz), sn.t);
+    } else markBins(tr, b, sn.t, sn.t);
+    tr.seam = b;
+  } else markBins(tr, sn.s, tr.t, sn.t);
+  tr.dirX += sn.x - tr.x;
+  tr.speed = moved;
+  tr.t = sn.t; tr.x = sn.x; tr.z = sn.z;
+}
+function inputUp(cancel) {
+  const tr = Game.trace; Game.trace = null;
+  Game.lastUp = Game.t; Game.demo.shown = false; // the demo may come back after the next idle stretch
+  AudioFX.setRub(false, 0, 0);
+  if (Game.revealPending) { Game.revealPending = false; Game.revealed = true; logEv('reveal', {}); }
+  if (!tr || tr.pending || tr.holdFired || tr.covered.size === 0) { if (tr && tr.live && !cancel) { /* keep */ } return; }
+  releaseTrace(tr, cancel);
+}
+function coveredBins(tr) { const a = []; tr.covered.forEach(i => a.push(BINS[i])); return a; }
+function kidDist(k, bins) {
+  const kx = k.state === 'air' && k.air ? k.air.x1 : k.x, kz = k.state === 'air' && k.air ? k.air.z1 : k.z;
+  let d = 1e9; for (const b of bins) { const e = Math.hypot(b.x - kx, b.z - kz); if (e < d) d = e; }
+  return d;
+}
+function releaseTrace(tr, cancel) {
+  const bins = coveredBins(tr);
+  const L = bins.length * BIN;
+  if (cancel) { if (tr.live) { tr.live.life = Math.min(tr.live.life, tr.live.age + 1.0); } logEv('cancel', {}); return; }
+  const wide = L >= WIDE_L - 1e-6;
+  const dirX = Math.sign(tr.dirX) || 0;
+  const reach = (k) => RANGE + (k.seated ? 0.06 : 0);
+  const inRange = Game.kids.filter(k => kidDist(k, bins) <= reach(k));
+  // 1) a free ball being carried in the dent: deliver it gently, no jump
+  const carriedBall = !tr.startNearKid && Game.balls.find(b => b.state === 'cloth' && !b.pick && b.carry > 0.12 && Math.hypot(b.x - tr.x, b.z - tr.z) < 0.5);
+  logEv('release', { L: +L.toFixed(2), wide, inRange: inRange.map(k => k.id), carried: !!carriedBall, crossed: tr.crossed[0] || tr.crossed[1] });
+  if (carriedBall) {
+    if (tr.live) removeSaucer(tr.live);
+    const k = Game.kids.filter(k => k.seated && k.state === 'ground' && k.holding < 0 && k.pickBall < 0).sort((p, q) => Math.hypot(p.x - carriedBall.x, p.z - carriedBall.z) - Math.hypot(q.x - carriedBall.x, q.z - carriedBall.z))[0];
+    if (k && Math.hypot(k.x - carriedBall.x, k.z - carriedBall.z) < 1.0) {
+      carriedBall.flowTo = [k.x, k.z + 0.06, k.id]; carriedBall.flowT = 2.5; carriedBall.flowFrom = -1; carriedBall.deliverTo = k.id;
+      const dx = k.x - carriedBall.x, dz = k.z - carriedBall.z, d = Math.hypot(dx, dz) || 1;
+      carriedBall.vx += dx / d * 0.5; carriedBall.vz += dz / d * 0.5;
+      k.lookOverride = [carriedBall.x, carriedBall.y, carriedBall.z]; k.lookT = 1.0; k.excitedT = 0.8;
+    }
+    Game.stats.carries++;
+    AudioFX.plop();
+    return;
+  }
+  if (wide) {
+    // soft wide cloth: the saucer (already live while pressing). kids standing on it hop low together and settle into it
+    const sc = (tr.live && saucerAlive(tr.live)) ? tr.live : makeSaucer(bins);
+    sc.live = false;
+    const ground = inRange.filter(k => k.state === 'ground' && !k.pending);
+    const recent = ground.filter(k => Game.t - k.landT < 0.7);
+    recent.forEach(k => { if (!sc.used) absorbInto(k, sc, 'grace'); });
+    const hop = ground.filter(k => recent.indexOf(k) < 0);
+    inRange.filter(k => k.pending).forEach(k => { /* the arriving wave will be absorbed on arrival */ });
+    if (hop.length) {
+      const tag = hop.length > 1 ? Game.tagSeq++ : 0;
+      sc.cap = Math.max(sc.cap, hop.length + recent.length);
+      hop.forEach(k => launch(k, hop.length > 1 ? 0.3 : 0.34, { cause: 'wide', tag, dirX, depth: 0.35 }));
+      if (hop.length > 1) { Game.stats.groupHops++; logEv('groupHop', { kids: hop.map(k => k.id) }); }
+      if (hop.length > 1) sc.rx = Math.max(sc.rx, 0.7);
+    }
+    return;
+  }
+  // 2) springy short trace: launch the kid under the start (and the end, unless the trace crossed a boundary)
+  // one child per end of the stroke: the one nearest where it began, and (for a longer stroke that
+  // did not cross a boundary) the one nearest where it ended
+  const crossed = tr.crossed[0] || tr.crossed[1];
+  const nearestTo = (x, z) => Game.kids.filter(k => Math.hypot(k.x - x, k.z - z) <= reach(k)).sort((p, q) => Math.hypot(p.x - x, p.z - z) - Math.hypot(q.x - x, q.z - z))[0];
+  const ks = nearestTo(tr.sx0, tr.sz0);
+  const ke = (!crossed && L >= 0.45) ? nearestTo(tr.x, tr.z) : null;
+  let set = [ks, ke].filter((k, i, a) => k && a.indexOf(k) === i);
+  if (!set.length) { const n = nearestTo(tr.x, tr.z); if (n) set = [n]; }
+  if (!set.length) set = inRange.sort((p, q) => kidDist(p, bins) - kidDist(q, bins)).slice(0, 1);
+  if (!set.length) { AudioFX.boing(0.3, 0.12); logEv('emptyTap', {}); return; }
+  const ground = set.filter(k => k.state === 'ground');
+  const air = set.filter(k => k.state === 'air');
+  air.forEach(k => { k.queuedH = Math.max(k.queuedH || 0, 0.62); Game.stats.boosts++; Cl.boost = Math.max(Cl.boost, 2.5); logEv('queue', { kid: k.id }); });
+  const solo = ground.length === 1;
+  const H = solo ? lerp(0.86, 0.62, clamp((L - 0.3) / 0.6, 0, 1)) : 0.42;
+  const tag = ground.length > 1 ? Game.tagSeq++ : 0;
+  ground.forEach(k => {
+    const boost = k.pending || Game.t - k.landT < 1.0;
+    if (boost) { Game.stats.boosts++; Cl.boost = Math.max(Cl.boost, 2.5); }
+    if (k.pending) { k.pending.dead = true; k.pending = null; }
+    launch(k, k.seated ? Math.min(H, 0.5) : H, { cause: boost ? 'boost' : 'trace', tag, dirX, depth: 1 - L / WIDE_L, solo });
+  });
+  if (ground.length > 1) { Game.stats.groupHops++; logEv('groupHop', { kids: ground.map(k => k.id), springy: true }); }
+}
+function unrelatedTouch(sx, sy, body) {
+  if (body) {
+    body.wiggleT = 0.6; body.excitedT = 0.4; AudioFX.giggle(clamp(body.x / 2, -1, 1));
+    const fs = footSnapFor(body);
+    body.lookOverride = [fs.x, 0, fs.z]; body.lookT = 1.0;
+    Game.flash = { seam: fs.s, t: fs.t, age: 0 };
+    logEv('unrelated', { what: 'kid', kid: body.id });
+    return;
+  }
+  for (const b of Game.balls) {
+    const p = project([b.x, b.y, b.z]);
+    if (Math.hypot(p[0] - sx, p[1] - sy) < 26) {
+      if (b.state === 'cloth') { b.vy = 0.6; b.hop = 1; }
+      AudioFX.tick(clamp(b.x / 2, -1, 1)); logEv('unrelated', { what: 'ball' }); return;
+    }
+  }
+  const R = Game.ribbon;
+  for (const q of R.pts) {
+    const p = project(q.p);
+    if (Math.hypot(p[0] - sx, p[1] - sy) < 24) {
+      ribbonPoke(q.p, [1, 0, 0.3], false); AudioFX.tick(0);
+      const g = Game.kids[0]; g.lookOverride = [R.x, RIBBON_TIP, KID_Z]; g.lookT = 0.8;
+      logEv('unrelated', { what: 'ribbon' }); return;
+    }
+  }
+  const hit = rayPlane(sx, sy, 0);
+  if (hit && insideSheet(hit[0], hit[2], 0.04)) {
+    clothImpulse(hit[0], hit[2], 0.07, 0.18);
+    AudioFX.tick(clamp(hit[0] / 2, -1, 1)); logEv('unrelated', { what: 'cloth' });
+    return;
+  }
+  const fh = rayPlane(sx, sy, FLOOR_Y) || hit;
+  if (fh) Game.ripple = { x: fh[0], z: fh[2], t: 0, s: 1 };
+  AudioFX.tick(0);
+  logEv('unrelated', { what: 'floor' });
+}
+function traceUpdate(dt) {
+  const tr = Game.trace;
+  if (!tr || !tr.active || tr.pending || tr.holdFired) return;
+  const L = tr.covered.size * BIN;
+  // the wide cushion is live while the finger is still down
+  if (L >= WIDE_L) {
+    if (!tr.live || !saucerAlive(tr.live)) tr.live = makeSaucer(coveredBins(tr));
+    else if (!tr.live.used) { makeSaucer(coveredBins(tr), tr.live); tr.live.age = Math.min(tr.live.age, 0.6); }
+    if (!tr.wideNotified) { tr.wideNotified = true; AudioFX.softLand(); }
+  }
+  // press and hold still with a child in reach: act as if released
+  if (L < WIDE_L && Game.t - tr.lastNewT > 1.25 && Game.t - tr.startT > 1.25) {
+    const bins = coveredBins(tr);
+    if (Game.kids.some(k => k.state === 'ground' && kidDist(k, bins) <= RANGE)) {
+      releaseTrace(tr, false);
+      tr.holdFired = true;
+      AudioFX.setRub(false, 0, 0);
+      logEv('holdRelease', {});
+    }
+  }
+  // rub sound follows finger speed and the depth of the dent
+  const depth = tr.snapped ? clamp(-clothH(tr.x, tr.z) / 0.2, 0, 1) : 0;
+  const sp = clamp((tr.speed || 0) / 25, 0, 1);
+  tr.speed = (tr.speed || 0) * Math.exp(-10 * dt);
+  AudioFX.setRub(tr.snapped, depth, Math.max(sp, 0.12));
+}
+function traceForces() {
+  const tr = Game.trace;
+  if (!tr || !tr.active || tr.pending || tr.holdFired) return;
+  const L = tr.covered.size * BIN;
+  const ex = Math.max(0, L - 0.3);
+  tr.covered.forEach(bi => { const b = BINS[bi]; const age = Game.t - tr.binT.get(bi); clothForce(b.x, b.z, 0.17, 2.3 * (0.6 + 0.4 * Math.exp(-age * 1.5))); });
+  if (tr.snapped) clothForce(tr.x, tr.z, 0.11 + 0.05 * Math.min(ex, 1.5), 95 / (1 + 1.6 * ex));
+}
+function pressInfluence(k) {
+  const tr = Game.trace;
+  if (!tr || !tr.active || tr.pending || tr.holdFired) return 0;
+  let inf = 0;
+  if (tr.snapped) inf = 1 - smooth(0.12, 0.72, Math.hypot(tr.x - k.x, tr.z - k.z));
+  const L = tr.covered.size * BIN;
+  tr.covered.forEach(bi => { const b = BINS[bi]; const d = Math.hypot(b.x - k.x, b.z - k.z); if (d < RANGE) inf = Math.max(inf, 0.55 * (1 - d / RANGE)); });
+  return inf * (L >= WIDE_L ? 0.55 : 1);
+}
+
+// ===================================================================
+//  Kid behaviour update
+// ===================================================================
+function updateKid(k, dt) {
+  k.time += dt; k.groundT += dt;
+  if (k.settleT > 0) k.settleT -= dt; if (k.happyT > 0) k.happyT -= dt; if (k.excitedT > 0) k.excitedT -= dt;
+  if (k.wobbleT > 0) k.wobbleT -= dt; if (k.wiggleT > 0) k.wiggleT -= dt; if (k.lookT > 0) k.lookT -= dt;
+  if (k.lookT <= 0) k.lookOverride = null;
+  k.minCrouch = Math.max(0, k.minCrouch - dt * (Game.trace && Game.trace.active ? 0.15 : 1.2));
+  if (k.seatTo && k.state === 'ground') {
+    k.x = damp(k.x, k.seatTo[0], 5, dt); k.z = damp(k.z, k.seatTo[1], 5, dt);
+    if (Math.hypot(k.x - k.seatTo[0], k.z - k.seatTo[1]) < 0.01) k.seatTo = null;
+  }
+  k.sitAmt = damp(k.sitAmt, k.seated ? 1 : 0, k.seated ? 5.5 : 6.5, dt);
+  const prevY = k.rootY;
+  const R = Game.ribbon;
+  if (k.state === 'air') {
+    const a = k.air; a.t += dt;
+    const y = a.y0 + a.vy * a.t - 0.5 * GRAV * a.t * a.t;
+    if (a.cause !== 'reposition' && (!a.sauc || !saucerTakes(a.sauc, k))) {
+      const sc = saucerNear(k.x, k.z, 1.05);
+      a.sauc = sc || null;
+      if (sc) { const p = nearestFree(sc.x, sc.z, k, 0.74); a.x1 = p[0]; a.z1 = p[1]; }
+    }
+    const rem = Math.max(a.T - a.t, 0.08);
+    k.x += (a.x1 - k.x) * Math.min(1, dt / rem); k.z += (a.z1 - k.z) * Math.min(1, dt / rem);
+    k.rootY = y; a.peakY = Math.max(a.peakY, y);
+    k.airAmt = damp(k.airAmt, 1, 14, dt);
+    const u = a.t / a.T;
+    k.swing = damp(k.swing, u < 0.3 ? 1 : 0.2, 8, dt);
+    k.tuck = Math.sin(clamp(u, 0, 1) * PI) * clamp(a.H * 0.9, 0.2, 0.75);
+    k.crouch = damp(k.crouch, 0, 10, dt); k.crouchV = 0;
+    const nearR = underRibbon(k) && a.H > 0.5 && k.holding < 0 && !k.seated;
+    const upT = nearR ? 1 : (a.H > 0.5 && k.holding < 0 && !k.seated ? 0.55 : 0);
+    k.armR.up = damp(k.armR.up, u > 0.12 ? upT : 0, 10, dt);
+    k.armL.up = damp(k.armL.up, u > 0.12 ? upT * (nearR ? 0.35 : 1) : 0, 10, dt);
+    if (k.holding >= 0 && !a.thrown && u >= 0.4) { a.thrown = true; throwBall(k); }
+    if (k.J) checkRibbon(k);
+    if (a.t > a.T * 0.5 && y <= clothH(k.x, k.z)) land(k);
+  } else {
+    k.airAmt = damp(k.airAmt, 0, 16, dt);
+    k.tuck = damp(k.tuck, 0, 10, dt);
+    k.swing = damp(k.swing, 0, 6, dt);
+    k.rootY = clothH(k.x, k.z + (k.seated ? 0.02 : 0.03));
+    let target = Math.max(pressInfluence(k) * (k.seated ? 0.35 : 0.8), k.minCrouch);
+    const eager = k.id === 0 && !k.seated && !Game.trace && k.holding < 0 && !Game.testNoIdle;
+    if (eager) target += 0.06 + 0.05 * Math.sin(k.time * 5.5);
+    target += clamp(-clothV(k.x, k.z) * 0.1, -0.08, 0.35);
+    if (k.wobbleT > 0) target += 0.2 * Math.sin(k.wobbleT * 12) * k.wobbleT;
+    k.crouchV += (target - k.crouch) * 220 * dt;
+    k.crouchV *= Math.exp(-15 * dt);
+    k.crouch = clamp(k.crouch + k.crouchV * dt, 0, 1);
+    const wantR = k.id === 0 && !k.seated && k.holding < 0 && underRibbon(k) && !Game.trace && !Game.testNoIdle;
+    k.armR.up = damp(k.armR.up, wantR ? 0.88 + 0.12 * Math.max(0, Math.sin(k.time * 1.6)) : 0, 4, dt);
+    k.armL.up = damp(k.armL.up, 0, 4, dt);
+  }
+  if (k.reposition && k.state === 'ground') {
+    k.reposition.t -= dt;
+    if (k.reposition.t <= 0) {
+      const rp = k.reposition; k.reposition = null;
+      if (Math.hypot(rp.x - k.x, rp.z - k.z) > 0.06) launch(k, 0.2, { cause: 'reposition', to: [rp.x, rp.z] });
+    }
+  }
+  if (k.pickBall >= 0) { k.pickT += dt / 0.45; if (k.pickT >= 1) { k.pickT = 1; finishPick(k); } }
+  k.leanFwd = k.pickBall >= 0 ? Math.sin(clamp(k.pickT, 0, 1) * PI) * 0.4 : damp(k.leanFwd, 0, 6, dt);
+  const holdT = k.holding >= 0 ? 1 : (k.pickBall >= 0 ? smooth(0.5, 1, k.pickT) : 0);
+  k.hold = damp(k.hold, holdT, 9, dt);
+  if (k.throwT > 0) { k.throwT += dt / 0.35; if (k.throwT >= 1) k.throwT = 0; }
+  k.reach = damp(k.reach, k.reachFor ? 1 : 0, 6, dt);
+  if (k.reachFor) k.reachDir = rotY(V.norm([k.reachFor.x - k.x, 0.15, k.reachFor.z - k.z]), -k.yaw);
+  k.wiggle = damp(k.wiggle, k.wiggleT > 0 ? 1 : 0, 10, dt);
+  k.breath = Math.sin(k.time * 1.7);
+  // children face the viewer, turning partly toward the one they pass with
+  const baseYaw = Cam.yaw || 0;
+  let yawT = baseYaw;
+  const other = k.holding >= 0 && k.partner >= 0 ? Game.kids[k.partner] : (k.reachFor || null);
+  if (other) yawT = baseYaw + clamp(angDiff(Math.atan2(other.x - k.x, other.z - k.z), baseYaw) * 0.45, -0.75, 0.75);
+  k.yaw = k.yaw + angDiff(yawT, k.yaw) * (1 - Math.exp(-4 * dt));
+  const g = gazeTarget(k);
+  const hp = kidHeadPos(k);
+  const dx = g[0] - hp[0], dy = g[1] - hp[1], dz = g[2] - hp[2];
+  const yawG = Math.atan2(dx, dz) - k.yaw, pitG = Math.atan2(dy, Math.hypot(dx, dz));
+  // keep the face toward the viewer: the head only dips a little, the eyes do the rest of a downward look
+  const yawC = clamp(yawG, -1.1, 1.1), pitC = clamp(pitG, -0.75, 0.65);
+  k.headYaw = damp(k.headYaw, yawC * 0.72, 7, dt); k.headPitch = damp(k.headPitch, Math.max(pitC * 0.6, -0.22), 7, dt);
+  k.eyeYaw = damp(k.eyeYaw, clamp(yawG - k.headYaw, -0.45, 0.45), 14, dt);
+  k.eyePitch = damp(k.eyePitch, clamp(pitG - k.headPitch, -0.42, 0.3), 14, dt);
+  let sm = 0.38, op = 0;
+  if (k.state === 'air') { sm = 0.95; op = k.air.H > 0.45 ? 0.8 : 0.3; }
+  if (k.holding >= 0) sm = Math.max(sm, 0.75);
+  if (k.reachFor) { sm = Math.max(sm, 0.6); op = Math.max(op, 0.55); }
+  if (k.excitedT > 0) op = Math.max(op, 0.7);
+  if (k.happyT > 0) { sm = 1; op = Math.max(op, k.happyT > 0.8 ? 0.75 : 0.2); }
+  if (pressInfluence(k) > 0.3) op = Math.max(op, 0.6);
+  if (Game.breath.t >= 0) { sm = 1; op = 0.8; }
+  k.smile = damp(k.smile, sm, 6, dt); k.open = damp(k.open, op, 8, dt);
+  k.expr = (k.open > 0.5 && k.smile > 0.62) ? 2 : (k.open > 0.5 ? 3 : (k.smile > 0.58 ? 1 : 0));
+  k.squint = k.expr === 2 ? 0.35 : 0;
+  k.blinkT -= dt;
+  if (k.blinkT < 0) { k.blinkAmt = 1; if (k.blinkT < -0.12) { k.blinkT = 2.2 + ((k.id * 7 + Math.floor(k.time)) % 5) * 0.6; k.blinkAmt = 0; } }
+  const vy = (k.rootY - prevY) / Math.max(dt, 1e-3);
+  const acc = k._vy != null ? (vy - k._vy) / Math.max(dt, 1e-3) : 0;
+  k._vy = vy;
+  k.tailV += (-k.tailSwing * 60 - k.tailV * 6 + clamp(acc, -60, 60) * 0.05) * dt;
+  k.tailSwing = clamp(k.tailSwing + k.tailV * dt, -0.8, 0.8);
+}
+function gazeTarget(k) {
+  if (k.lookOverride) return k.lookOverride;
+  if (k.state === 'air' && k.air.tag) {
+    const o = Game.kids.find(o => o !== k && o.state === 'air' && o.air.tag === k.air.tag);
+    if (o) return kidHeadPos(o);
+  }
+  const tr = Game.trace;
+  if (tr && tr.active && !tr.pending && k.state === 'ground' && pressInfluence(k) > 0.2) {
+    // standing on the same pressed cloth: glance at each other
+    const o = Game.kids.find(o => o !== k && o.state === 'ground' && pressInfluence(o) > 0.2);
+    if (o && ((Game.t * 0.8 + k.id * 0.3) % 1) < 0.45) return kidHeadPos(o);
+  }
+  const fly = Game.balls.find(b => b.state === 'fly' && b.fly.to === k.id);
+  if (fly) return [fly.x, fly.y, fly.z];
+  if (k.holding >= 0 && k.partner >= 0) return kidHeadPos(Game.kids[k.partner]);
+  if (k.reachFor) { const b = Game.balls[k.reachFor.holding]; return b ? [b.x, b.y, b.z] : kidHeadPos(k.reachFor); }
+  if (k.pickBall >= 0) { const b = Game.balls[k.pickBall]; return [b.x, b.y, b.z]; }
+  if (tr && tr.active && tr.snapped) return [tr.x, clothH(tr.x, tr.z), tr.z];
+  const R = Game.ribbon;
+  if (k.state === 'air' && underRibbon(k) && k.air.H > 0.5) return [R.x, RIBBON_TIP + 0.1, KID_Z];
+  const rolling = Game.balls.find(b => b.state === 'cloth' && Math.hypot(b.vx, b.vz) > 0.25 && Math.hypot(b.x - k.x, b.z - k.z) < 0.9);
+  if (rolling) return [rolling.x, rolling.y, rolling.z];
+  const flier = Game.kids.find(o => o !== k && o.state === 'air');
+  if (flier) return kidHeadPos(flier);
+  const inv = Game.invite;
+  const ph = (k.time * 0.4 + k.id * 0.37) % 1;
+  if (k.id === 0 && !k.seated && ph < 0.4 && underRibbon(k)) return [R.x, RIBBON_TIP + 0.15, KID_Z];
+  if (inv) { const c = seamPoint(inv.seam, (inv.a + inv.b) / 2); return [c[0], 0, c[1]]; }
+  return [Cam.eye[0], 0.6, Cam.eye[2]];
+}
+function updatePartners() {
+  Game.kids.forEach(k => { k.reachFor = null; k.partner = -1; });
+  Game.kids.forEach(k => {
+    if (k.holding < 0) return;
+    const p = pickPartner(k);
+    if (p) { k.partner = p.id; if (!p.reachFor) p.reachFor = k; }
+  });
+}
+
+// ===================================================================
+//  Invitation (exactly one seam segment) & demo hand
+// ===================================================================
+function nearestHSeamFor(z) { let best = 0, bd = 1e9; SZ.forEach((c, i) => { const d = Math.abs(c - z); if (d < bd) { bd = d; best = i; } }); return SEAMS[best]; }
+function footInvite(k, half, kind) {
+  const s = nearestHSeamFor(k.z + 0.22);
+  const c = clamp(k.x, s.a + half, s.b - half);
+  return { seam: s, a: c - half, b: c + half, kind, kid: k.id, wide: half * 2 >= WIDE_L - 0.05 };
+}
+function spanInvite(k1, k2, kind) {
+  const s = nearestHSeamFor((k1.z + k2.z) / 2 + 0.22);
+  const a = Math.min(k1.x, k2.x) - 0.12, b = Math.max(k1.x, k2.x) + 0.12;
+  return { seam: s, a: Math.max(a, s.a), b: Math.min(b, s.b), kind, kid: k1.id, wide: true };
+}
+function ballRoute(b, k) {
+  let best = null;
+  SEAMS.forEach(s => {
+    const t = seamParam(s, b.x, b.z); const p = seamPoint(s, t);
+    const d = Math.hypot(p[0] - b.x, p[1] - b.z);
+    if (!best || d < best.d) best = { s, t, d };
+  });
+  if (!best || best.d > 0.36) return null;
+  const s = best.s;
+  if (s.axis === 0) {
+    const xv = SX.reduce((a, c) => Math.abs(c - k.x) < Math.abs(a - k.x) ? c : a, SX[0]);
+    if (Math.abs(xv - best.t) < 0.15) {
+      const vs = SEAMS[3 + SX.indexOf(xv)];
+      const tz = clamp(k.z + 0.32 * Math.sign(b.z - k.z || 1), vs.a, vs.b);
+      return { seam: vs, from: best.t * 0 + clamp(b.z, vs.a, vs.b), to: tz, len: Math.abs(tz - b.z) };
+    }
+    return { seam: s, from: best.t, to: xv, len: Math.abs(xv - best.t) + Math.abs(k.z - b.z) };
+  }
+  const zs = SZ.reduce((a, c) => Math.abs(c - k.z) < Math.abs(a - k.z) ? c : a, SZ[0]);
+  if (Math.abs(s.c - k.x) < 0.3) {
+    const tz = clamp(k.z + 0.32 * Math.sign(best.t - k.z || 1), s.a, s.b);
+    return { seam: s, from: best.t, to: tz, len: Math.abs(tz - best.t) };
+  }
+  if (Math.abs(zs - best.t) < 0.15) {
+    const hs = SEAMS[SZ.indexOf(zs)];
+    const tx = clamp(k.x + 0.32 * Math.sign(b.x - k.x || 1), hs.a, hs.b);
+    return { seam: hs, from: clamp(b.x, hs.a, hs.b), to: tx, len: Math.abs(tx - b.x) };
+  }
+  return { seam: s, from: best.t, to: zs, len: Math.abs(zs - best.t) + Math.abs(k.x - b.x) };
+}
+function deliverInvite(ground) {
+  const seatedFree = ground.filter(k => k.seated && k.holding < 0 && k.pickBall < 0);
+  if (!seatedFree.length) return null;
+  let best = null;
+  Game.balls.forEach(b => {
+    if (b.state !== 'cloth' || b.pick || anchoredBall(b)) return;
+    seatedFree.forEach(k => { const r = ballRoute(b, k); if (r && (!best || r.len < best.len)) best = Object.assign(r, { kid: k.id, ball: b.i }); });
+  });
+  if (!best) return null;
+  let a = Math.min(best.from, best.to), b = Math.max(best.from, best.to);
+  if (b - a < 0.3) { const c = (a + b) / 2; a = c - 0.15; b = c + 0.15; }
+  return { seam: best.seam, a, b, kind: 'deliver', kid: best.kid, wide: false, from: best.from, to: best.to, ball: best.ball };
+}
+function computeInvite() {
+  const K = Game.kids, st = Game.stats;
+  if (Game.breath.t >= 0) return null;
+  const ground = K.filter(k => k.state === 'ground');
+  const girl = K[0];
+  const airK = K.filter(k => k.state === 'air'), pend = K.find(k => k.pending);
+  const chainOn = (airK.some(k => k.air.cause === 'chain') || pend);
+  // a chain is bouncing: one fixed wide catch under the protagonist (or whoever is in it)
+  if (chainOn && st.chainLaunches >= 2 && st.chainAbsorbs < 2) {
+    const k = [girl].concat(K).find(k => k.state === 'air' || k.pending) || girl;
+    const fk = { x: k.air ? k.air.x1 : k.x, z: k.air ? k.air.z1 : k.z };
+    return Object.assign(footInvite(fk, 0.6, 'catch'), { kid: k.id });
+  }
+  if (airK.length && Game.invite) return Game.invite; // keep the target still while someone is in the air
+  if (K.every(k => k.seated && k.holding >= 0)) return null; // everyone settled with a ball: the rest moment comes
+  const standing = ground.filter(k => !k.seated);
+  const seatedAll = ground.filter(k => k.seated);
+  const holder = ground.find(k => k.holding >= 0 && k.partner >= 0 && k.pickBall < 0);
+  // 1. the ribbon (each cycle)
+  if (girl.state === 'ground' && !girl.seated && st.ribbon <= (Game.cycleRibbon || 0)) return footInvite(girl, 0.12, 'ribbon');
+  // 2. give the hop across a boundary
+  if (st.chainLaunches === 0) {
+    const src = (!girl.seated && girl.state === 'ground') ? girl : ground[0];
+    if (src) {
+      let nb = null; K.forEach(o => { if (o !== src && (!nb || Math.abs(o.x - src.x) < Math.abs(nb.x - src.x))) nb = o; });
+      const side = nb ? (Math.sign(nb.x - src.x) || 1) : 1;
+      const bx = side > 0 ? BOUNDS.find(b => b > src.x) : [...BOUNDS].reverse().find(b => b < src.x);
+      if (bx != null) {
+        const s = nearestHSeamFor(src.z + 0.22);
+        const a = src.x, b = bx + side * 0.14;
+        return { seam: s, a: Math.min(a, b), b: Math.max(a, b), kind: 'cross', kid: src.id, wide: false, from: a, to: b };
+      }
+    }
+  }
+  // 3. two neighbours hop low together
+  if (st.groupHops === 0) {
+    const sorted = ground.slice().sort((p, q) => p.x - q.x);
+    let pair = null;
+    for (let i = 0; i + 1 < sorted.length; i++) { const d = Math.abs(sorted[i + 1].x - sorted[i].x); if (d < 1.6 && (!pair || (sorted[i] === girl || sorted[i + 1] === girl))) pair = [sorted[i], sorted[i + 1]]; }
+    if (pair) return spanInvite(pair[0], pair[1], 'group');
+  }
+  // 4. pass and throw back (twice), and at least one catch every round
+  if (holder && (st.passes < 2 || (Game.cyclePasses || 0) < 1)) return footInvite(holder, 0.12, 'pass');
+  // 5. bring a free ball to a seated child without one
+  const dv = deliverInvite(ground);
+  if (dv && st.deliveries < 2) return dv;
+  // 6. let the weight go: a seated kid whose bowl holds a free ball, with another seated kid
+  if (seatedAll.length >= 2) {
+    const bowl = seatedAll.find(k => Game.balls.some(b => b.state === 'cloth' && !b.pick && Math.hypot(b.x - k.x, b.z - k.z) < 0.5));
+    const taker = bowl && seatedAll.find(o => o !== bowl && o.holding < 0 && o.pickBall < 0);
+    if (bowl && (taker || st.flowArrivals === 0)) return footInvite(bowl, 0.12, 'flow');
+  }
+  // 7. settle whoever is still standing (soft wide cloth under them)
+  if (standing.length) return footInvite(standing.find(k => k.id !== 0 && k.holding < 0) || standing.find(k => k.holding < 0) || standing[0], 0.6, 'seat');
+  // 8. more deliveries until everyone has a ball
+  if (dv) return dv;
+  // 9. a ball still sits with a holder while someone is empty-handed: pass it on
+  const empty = seatedAll.find(k => k.holding < 0);
+  if (empty && holder) return footInvite(holder, 0.12, 'pass');
+  if (girl.state === 'ground' && !girl.seated) return footInvite(girl, 0.12, 'hop');
+  const any = ground.find(k => k.holding < 0) || ground[0];
+  return any ? footInvite(any, 0.12, 'hop') : null;
+}
+function updateInvite(dt) {
+  Game.inviteT -= dt;
+  if (Game.trace && Game.trace.active) return;
+  if (Game.inviteT <= 0) {
+    const nv = computeInvite();
+    const same = nv && Game.invite && nv.seam === Game.invite.seam && Math.abs(nv.a - Game.invite.a) < 0.12 && Math.abs(nv.b - Game.invite.b) < 0.12;
+    const dwell = Game.t - Game.inviteSince;
+    const urgent = nv && (nv.kind === 'catch' || (Game.invite && Game.invite.kind === 'catch'));
+    if (!same && (dwell > 1.5 || urgent || !Game.invite || !nv)) { Game.invite = nv; Game.inviteSince = Game.t; Game.demo.on = false; }
+    else if (same && nv) Object.assign(Game.invite, { kind: nv.kind, from: nv.from, to: nv.to });
+    Game.inviteT = 0.3;
+  }
+  const D = Game.demo;
+  if (!D.on && !D.shown && Game.invite && !Game.trace && Game.t - Game.lastInput > 4.0 && Game.t > 2.0 && !Game.testNoIdle) {
+    D.on = true; D.shown = true; D.t = 0; D.seg = Object.assign({}, Game.invite);
+    D.T = D.seg.wide ? 2.1 : 1.35;
+    logEv('demo', { kind: D.seg.kind });
+  }
+  if (D.on) { D.t += dt; if (D.t > D.T) D.on = false; }
+}
+// visual-only stepping on the invited seam (never touches physics)
+function stepVisual() {
+  Cl.vis.fill(0);
+  const inv = Game.invite;
+  if (!inv || (Game.trace && Game.trace.active) || Game.testNoIdle) return;
+  const s = inv.seam, len = inv.b - inv.a;
+  const feet = [];
+  const t = Game.t;
+  if (len <= 0.45) {
+    const ph = t * 4.2;
+    feet.push([lerp(inv.a, inv.b, 0.2), Math.max(0, Math.sin(ph))], [lerp(inv.a, inv.b, 0.8), Math.max(0, Math.sin(ph + PI))]);
+  } else {
+    const rev = inv.from != null && inv.to != null && inv.to < inv.from;
+    const u = (t * 0.5) % 1;
+    for (let i = 0; i < 3; i++) {
+      const uu = (u + i / 3) % 1;
+      feet.push([rev ? lerp(inv.b, inv.a, uu) : lerp(inv.a, inv.b, uu), Math.max(0, Math.sin(t * 6.0 + i * 2.1)) * Math.sin(uu * PI)]);
+    }
+  }
+  feet.forEach(([tt, amp]) => {
+    if (amp <= 0.01) return;
+    const p = seamPoint(s, tt);
+    const r = 0.075, Rr = r * 2.5;
+    const i0 = Math.max(1, Math.floor(gx(p[0] - Rr))), i1 = Math.min(NX - 2, Math.ceil(gx(p[0] + Rr)));
+    const j0 = Math.max(1, Math.floor(gz(p[1] - Rr))), j1 = Math.min(NZ - 2, Math.ceil(gz(p[1] + Rr)));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const px = SHEET.x0 + i * DX, pz = SHEET.z0 + j * DZ;
+      const d2 = (px - p[0]) * (px - p[0]) + (pz - p[1]) * (pz - p[1]);
+      Cl.vis[i + j * NX] -= 0.022 * amp * Math.exp(-d2 / (r * r));
+    }
+  });
+}
+
+// ===================================================================
+//  Rest moment and cycle
+// ===================================================================
+function updateBreath(dt) {
+  const B = Game.breath, K = Game.kids;
+  const calm = (Game.cyclePasses || 0) >= 1 && K.every(k => k.seated && k.state === 'ground' && k.holding >= 0 && k.pickBall < 0) && !Game.packets.length && !Game.trace;
+  if (B.t < 0) {
+    B.wait = calm ? B.wait + dt : 0;
+    if (B.wait > 1.2) {
+      B.t = 0; B.wait = 0;
+      AudioFX.breath();
+      K.forEach(k => { k.happyT = 3.4; });
+      Game.stats.cycles++;
+      logEv('breath', {});
+    }
+  } else {
+    const prev = B.t; B.t += dt;
+    [0.4, 1.1, 1.9].forEach((tt, i) => { if (prev < tt && B.t >= tt) { const k = K[i % 3]; AudioFX.giggle(clamp(k.x / 2, -1, 1)); k.wiggleT = 0.5; emitSpark(k.x, k.rootY + 0.75, k.z, hex(0xfff0c8), 5); } });
+    if (K.some(k => k.state === 'air')) { B.t = -1; return; }
+    if (B.t > 3.6) { B.t = -1; restartCycle(); }
+  }
+}
+function restartCycle() {
+  const g = Game.kids[0];
+  if (g.holding >= 0) {
+    const b = Game.balls[g.holding];
+    g.holding = -1;
+    b.state = 'cloth'; b.owner = -1; b.x = clamp(g.x + 0.32, -BALL_X, BALL_X); b.z = clamp(g.z + 0.14, -BALL_Z, BALL_Z); b.vx = 0.15; b.vz = 0.05; b.hop = 1; b.vy = 0.3;
+  }
+  g.seated = false; g.happyT = 1.2;
+  // stand up, then a little hop back under the ribbon's rope
+  const p = nearestFree(g.x, KID_Z, g, 0.74);
+  Game.ribbon.tx = clamp(p[0], -1.5, 1.5);
+  g.reposition = { x: p[0], z: p[1], t: 0.55 };
+  Game.cycleRibbon = Game.stats.ribbon;
+  Game.cyclePasses = 0;
+  logEv('cycle', { n: Game.stats.cycles });
+  scheduleSave();
+}
+
+// ===================================================================
+//  Persistence (device-local, validated, failure tolerant)
+// ===================================================================
+let LS = null;
+function probeStorage() {
+  try { const s = window.localStorage; const k = '__pyon_probe'; s.setItem(k, '1'); s.removeItem(k); LS = s; }
+  catch (e) { LS = null; }
+  return LS;
+}
+function snapshot() {
+  return {
+    v: 1,
+    kids: Game.kids.map(k => ({ x: +k.baseX.toFixed(3), z: +k.baseZ.toFixed(3), seated: !!k.seated })),
+    owner: Game.balls.map(b => (b.state === 'held' ? b.owner : (b.state === 'fly' && b.fly ? b.fly.to : -1))),
+    balls: Game.balls.map(b => ({ x: +clamp(b.x, -BALL_X, BALL_X).toFixed(3), z: +clamp(b.z, -BALL_Z, BALL_Z).toFixed(3) })),
+    cycles: Game.stats.cycles,
+  };
+}
+function validSave(d) {
+  if (!d || typeof d !== 'object' || d.v !== 1) return false;
+  if (!Array.isArray(d.kids) || d.kids.length !== 3 || !Array.isArray(d.owner) || d.owner.length !== 3 || !Array.isArray(d.balls) || d.balls.length !== 3) return false;
+  const fin = (n) => typeof n === 'number' && Number.isFinite(n);
+  for (const k of d.kids) {
+    if (!k || typeof k !== 'object' || !fin(k.x) || !fin(k.z) || typeof k.seated !== 'boolean') return false;
+    if (Math.abs(k.x) > SEAT_X + 1e-6 || k.z < SEAT_Z0 - 1e-6 || k.z > SEAT_Z1 + 1e-6) return false;
+  }
+  for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) if (Math.hypot(d.kids[i].x - d.kids[j].x, d.kids[i].z - d.kids[j].z) < 0.55) return false;
+  const seen = new Set();
+  for (const o of d.owner) {
+    if (!(o === -1 || o === 0 || o === 1 || o === 2)) return false;
+    if (o >= 0) { if (seen.has(o)) return false; seen.add(o); }
+  }
+  for (const b of d.balls) { if (!b || typeof b !== 'object' || !fin(b.x) || !fin(b.z) || Math.abs(b.x) > BALL_X + 1e-6 || Math.abs(b.z) > BALL_Z + 1e-6) return false; }
+  if (d.cycles != null && !(fin(d.cycles) && d.cycles >= 0)) return false;
+  return true;
+}
+function loadSave() {
+  if (!probeStorage()) { Game.loadState = 'denied'; return null; }
+  let raw = null;
+  try { raw = LS.getItem(SAVE_KEY); } catch (e) { Game.loadState = 'denied'; return null; }
+  if (raw == null) { Game.loadState = 'none'; return null; }
+  if (typeof raw !== 'string' || raw.length > 4096) { Game.loadState = 'corrupt'; return null; }
+  try { const d = JSON.parse(raw); if (validSave(d)) { Game.loadState = 'restored'; return d; } } catch (e) { /* corrupt */ }
+  Game.loadState = 'corrupt';
+  return null;
+}
+function scheduleSave() { Game.saveDue = Game.t + 0.6; }
+function doSave() {
+  Game.saveDue = null;
+  if (!LS) { Game.saveState = 'denied'; return; }
+  try { LS.setItem(SAVE_KEY, JSON.stringify(snapshot())); Game.saveState = 'ok'; }
+  catch (e) { Game.saveState = 'denied'; }
+}
+function setupWorld(save) {
+  const L = save || DEFAULT_LAYOUT;
+  Game.kids = [0, 1, 2].map(i => {
+    const s = L.kids[i];
+    const k = makeKid(i, s.x, s.z, i !== 0);
+    k.baseX = s.x; k.baseZ = s.z;
+    return k;
+  });
+  Game.balls = [0, 1, 2].map(i => makeBall(i, L.balls[i].x, L.balls[i].z));
+  (L.owner || [-1, -1, -1]).forEach((o, i) => {
+    if (o < 0) return;
+    const b = Game.balls[i], k = Game.kids[o];
+    if (o === 0) { b.x = clamp(k.x + 0.32, -BALL_X, BALL_X); b.z = clamp(k.z + 0.14, -BALL_Z, BALL_Z); return; } // the poised protagonist sets hers down beside her
+    b.state = 'held'; b.owner = o; k.holding = i; k.hold = 1;
+  });
+  Game.stats.cycles = save && typeof save.cycles === 'number' ? save.cycles : 0;
+  Game.ribbon = makeRibbon(clamp(Game.kids[0].x, -1.5, 1.5));
+  for (let i = 0; i < 300; i++) { Cl.f.fill(0); kidForces(); clothStep(1 / 120); }
+  Game.kids.forEach(k => { k.rootY = clothH(k.x, k.z); });
+  Game.balls.forEach(b => { b.y = clothH(b.x, b.z) + b.r * 0.92; });
+}
+function kidForces() {
+  Game.kids.forEach(k => {
+    if (k.state !== 'ground') return;
+    const s = k.def.scale;
+    if (k.sitAmt > 0.5) { clothForce(k.x, k.z + 0.02, 0.25, 12); clothForce(k.x, k.z, 0.45, 2.0); }
+    else {
+      const extra = 1 + clamp(k.crouchV * 0.08, -0.3, 0.6);
+      clothForce(k.x - 0.075 * s, k.z + 0.03, 0.08, 35 * extra); clothForce(k.x + 0.075 * s, k.z + 0.03, 0.08, 35 * extra);
+    }
+  });
+  Game.saucers.forEach(s => {
+    const fade = smooth(0, 0.35, s.age) * (1 - smooth(s.life - 1.5, s.life, s.age));
+    if (fade > 0) clothForceEllipse(s.x, s.z, s.rx, s.rz, s.amp * fade);
+  });
+}
+// ===================================================================
+//  GL resources (rebuildable after context loss)
+// ===================================================================
+const R = { ok: false, P: {}, env: null, cloth: null, quad: null, ribbon: null, part: null, faces: [], shw: null };
+function makeShadowTarget() {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHW.w, SHW.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // a 1x1 white fallback
+  const white = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, white);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+  return { tex, fb, ok, white };
+}
+function initGL() {
+  R.ok = false;
+  R.P.env = program(VS_ENV, FS_ENV);
+  R.P.cloth = program(VS_CLOTH, FS_CLOTH);
+  R.P.body = program(VS_BODY, FS_BODY);
+  R.P.part = program(VS_PART, FS_PART);
+  R.P.shwq = program(VS_SHWQ, FS_SHWQ);
+  R.P.shwc = program(VS_SHWC, FS_SHWC);
+  R.env = buildEnv();
+  R.cloth = buildClothBuffers();
+  buildKidMeshes();
+  R.faces = KID_DEFS.map(d => [0, 1, 2, 3].map(e => drawFace(d, e)));
+  Game.kids.forEach((k, i) => { k.faceTex = R.faces[i]; });
+  { const q = surface(1, 1, (u, v) => ({ p: [u, v, 0], n: [0, 0, 1], uv: [u, v] })); R.quad = makeMesh(q.verts, q.idx); }
+  { // ribbon strip (dynamic)
+    const n = 10; const idx = [];
+    for (let i = 0; i < n - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    R.ribbonVerts = new Float32Array(n * 2 * STRIDE);
+    R.ribbon = makeMesh(Array.from(R.ribbonVerts), idx, true);
+  }
+  { // particles (dynamic points)
+    R.partVerts = new Float32Array(MAX_PARTS * STRIDE);
+    R.part = { vbo: gl.createBuffer() };
+    gl.bindBuffer(gl.ARRAY_BUFFER, R.part.vbo); gl.bufferData(gl.ARRAY_BUFFER, R.partVerts, gl.DYNAMIC_DRAW);
+  }
+  R.shw = makeShadowTarget();
+  for (let i = 0; i < 4; i++) gl.enableVertexAttribArray(i);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.disable(gl.CULL_FACE);
+  R.ok = true;
+}
+
+// ===================================================================
+//  Rendering
+// ===================================================================
+const OCC = new Float32Array(18 * 4);
+let nOcc = 0;
+function gatherOccluders() {
+  nOcc = 0;
+  const add = (p, r) => { if (nOcc >= 18) return; OCC[nOcc * 4] = p[0]; OCC[nOcc * 4 + 1] = p[1]; OCC[nOcc * 4 + 2] = p[2]; OCC[nOcc * 4 + 3] = r; nOcc++; };
+  Game.kids.forEach(k => {
+    const J = k.J; if (!J) return;
+    const s = J.s;
+    add(J.head, 0.1 * s); add(J.chest, 0.12 * s); add(J.pelvis, (k.seated ? 0.15 : 0.11) * s);
+    add(V.lerp(J.legs[0].ankle, J.legs[1].ankle, 0.5), (k.seated ? 0.14 : 0.075) * s);
+  });
+  Game.balls.forEach(b => add([b.x, b.y, b.z], b.r));
+}
+function setCommon(P) {
+  const U = P.U;
+  if (U.u_eye) gl.uniform3fv(U.u_eye, Cam.eye);
+  if (U.u_lk) gl.uniform3fv(U.u_lk, Cam.lk || [0.1499, 0.8494, 0.5060]);
+  if (U.u_time) gl.uniform1f(U.u_time, Game.t);
+  if (U.u_exposure) gl.uniform1f(U.u_exposure, 1.0);
+  if (U.u_occ) gl.uniform4fv(U.u_occ, OCC);
+  if (U.u_nocc) gl.uniform1f(U.u_nocc, nOcc);
+  if (U.u_shwR) gl.uniform4f(U.u_shwR, SHW.x0, SHW.z0, 1 / (SHW.x1 - SHW.x0), 1 / (SHW.z1 - SHW.z0));
+  if (U.u_shw) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.shw.ok ? R.shw.tex : R.shw.white); gl.uniform1i(U.u_shw, 1); gl.activeTexture(gl.TEXTURE0); }
+}
+function bindCloth(cb) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb.bxz); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cb.bdyn); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 16, 0);
+  gl.disableVertexAttribArray(2); gl.disableVertexAttribArray(3);
+  gl.vertexAttrib2f(2, 0, 0); gl.vertexAttrib3f(3, 0, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cb.ibo);
+}
+function unbindCloth() { gl.enableVertexAttribArray(2); gl.enableVertexAttribArray(3); }
+// cloth program binds a_xz to location 0 and a_h to location 1 (names differ, so bind explicitly)
+function bakeShadows() {
+  if (!R.shw.ok) return;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, R.shw.fb);
+  gl.viewport(0, 0, SHW.w, SHW.h);
+  gl.disable(gl.DEPTH_TEST);
+  let P = R.P.shwq; gl.useProgram(P.p); setCommon(P);
+  gl.uniform1f(P.U.u_floorY, FLOOR_Y + 0.04);
+  bindMesh(R.quad); drawMesh(R.quad);
+  P = R.P.shwc; gl.useProgram(P.p); setCommon(P);
+  gl.colorMask(true, false, false, false);
+  bindCloth(R.cloth); gl.drawElements(gl.TRIANGLES, R.cloth.count, gl.UNSIGNED_SHORT, 0); unbindCloth();
+  gl.colorMask(true, true, true, true);
+  gl.enable(gl.DEPTH_TEST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+const TRAIL = new Float32Array(40);
+function drawScene() {
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.42, 0.46, 0.5, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // environment
+  let P = R.P.env; gl.useProgram(P.p); setCommon(P);
+  gl.uniformMatrix4fv(P.U.u_vp, false, Cam.vp);
+  gl.uniform2f(P.U.u_link, Cl.link[0], Cl.link[1]);
+  gl.uniform1f(P.U.u_reveal, Game.reveal);
+  gl.uniform2f(P.U.u_bounds, BOUNDS[0], BOUNDS[1]);
+  const rp = Game.ripple; gl.uniform4f(P.U.u_ripple, rp.x, rp.z, rp.t, rp.t < 0.8 ? rp.s * (1 - rp.t / 0.8) : 0);
+  bindMesh(R.env); drawMesh(R.env);
+  // cloth
+  P = R.P.cloth; gl.useProgram(P.p); setCommon(P);
+  gl.uniformMatrix4fv(P.U.u_vp, false, Cam.vp);
+  gl.uniform1fv(P.U.u_sx, SX); gl.uniform1fv(P.U.u_sz, SZ);
+  const inv = Game.invite;
+  const showInv = inv && !(Game.trace && Game.trace.active) && !Game.testNoIdle;
+  if (inv) gl.uniform4f(P.U.u_inv, inv.seam.axis, inv.seam.c, inv.a, inv.b);
+  gl.uniform1f(P.U.u_invOn, showInv ? 1 : 0);
+  const tr = Game.trace;
+  gl.uniform4f(P.U.u_finger, tr && tr.snapped ? tr.x : 0, tr && tr.snapped ? tr.z : 0, 0.16, tr && tr.active && tr.snapped && !tr.holdFired ? 1 : 0);
+  TRAIL.fill(0);
+  if (tr && tr.active && !tr.pending && !tr.holdFired) {
+    const arr = []; tr.covered.forEach(bi => arr.push([bi, tr.binT.get(bi)]));
+    arr.sort((a, b) => b[1] - a[1]);
+    for (let i = 0; i < Math.min(9, arr.length); i++) { const b = BINS[arr[i][0]]; TRAIL[i * 4] = b.x; TRAIL[i * 4 + 1] = b.z; TRAIL[i * 4 + 2] = 0.8; }
+  }
+  if (Game.flash && Game.flash.age < 0.7) { const p = seamPoint(Game.flash.seam, Game.flash.t); TRAIL[36] = p[0]; TRAIL[37] = p[1]; TRAIL[38] = Math.sin(Game.flash.age / 0.7 * PI); }
+  gl.uniform4fv(P.U.u_trail, TRAIL);
+  gl.uniform2f(P.U.u_link, smooth(0.3, 1, Cl.link[0]), smooth(0.3, 1, Cl.link[1]));
+  gl.uniform2f(P.U.u_sheetH, SHEET.x1, SHEET.z1);
+  bindCloth(R.cloth); gl.drawElements(gl.TRIANGLES, R.cloth.count, gl.UNSIGNED_SHORT, 0); unbindCloth();
+  // characters, balls, ribbon
+  P = R.P.body; gl.useProgram(P.p); setCommon(P);
+  const U = P.U;
+  gl.uniformMatrix4fv(U.u_vp, false, Cam.vp);
+  gl.uniform3f(U.u_gnd, 0.09, 0.12, 0.27);
+  gl.uniform1f(U.u_emit, 0);
+  gl.uniform1i(U.u_tex, 0);
+  poolReset();
+  const list = [];
+  Game.kids.forEach(k => kidDrawList(k, list));
+  // balls
+  Game.balls.forEach(b => {
+    const m = _tm; const r = b.r * (b.state === 'held' ? 0.96 : 1);
+    m.set(b.rot); for (let i = 0; i < 3; i++) { m[i] *= r; m[4 + i] *= r; m[8 + i] *= r; }
+    m[12] = b.x; m[13] = b.y; m[14] = b.z;
+    matItem(MESH.sphere, m, 4, b.col, null, null, list);
+  });
+  // ribbon ring
+  { const q = Game.ribbon.pts[0].p; ellItem(q, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], 0.03, 0.03, 0.03, 7, hex(0xd8c070), list, MESH.sphereLo); }
+  let lastMesh = null, lastTex = null;
+  for (const it of list) {
+    if (it.mesh !== lastMesh) { bindMesh(it.mesh); lastMesh = it.mesh; }
+    gl.uniformMatrix4fv(U.u_model, false, it.m);
+    gl.uniformMatrix3fv(U.u_nmat, false, it.nm);
+    gl.uniform3f(U.u_cap, it.cap[0], it.cap[1], it.cap[2]);
+    gl.uniform3fv(U.u_color, it.color);
+    gl.uniform3fv(U.u_color2, it.color2 || it.color);
+    gl.uniform1f(U.u_kind, it.kind);
+    if (it.tex) { if (lastTex !== it.tex) { gl.bindTexture(gl.TEXTURE_2D, it.tex); lastTex = it.tex; } gl.uniform1f(U.u_texOn, 1); }
+    else gl.uniform1f(U.u_texOn, 0);
+    drawMesh(it.mesh);
+  }
+  drawRibbon(U);
+  drawParticles();
+}
+function drawRibbon(U) {
+  const Rb = Game.ribbon, pts = Rb.pts, n = pts.length, v = R.ribbonVerts;
+  const w = 0.036;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i].p;
+    const a = pts[Math.max(0, i - 1)].p, b = pts[Math.min(n - 1, i + 1)].p;
+    const t = V.norm(V.sub(b, a));
+    const tw = Rb.twist * 0.5 + i * 0.22;
+    let side = [Math.cos(tw), 0, Math.sin(tw) * 0.6 + 0.2];
+    side = V.norm(V.sub(side, V.scale(t, V.dot(side, t))));
+    const nrm = V.norm(V.cross(side, t));
+    const ww = w * (i === n - 1 ? 1.15 : 1);
+    const notch = i === n - 1 ? 0.045 : 0;
+    [-1, 1].forEach((sd, j) => {
+      const o = (i * 2 + j) * STRIDE;
+      const q = V.add(p, V.scale(side, sd * ww));
+      v[o] = q[0]; v[o + 1] = q[1] + notch; v[o + 2] = q[2];
+      v[o + 3] = nrm[0]; v[o + 4] = nrm[1]; v[o + 5] = nrm[2];
+      v[o + 6] = j; v[o + 7] = i / (n - 1); v[o + 8] = 0; v[o + 9] = 0; v[o + 10] = 0;
+    });
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, R.ribbon.vbo); gl.bufferSubData(gl.ARRAY_BUFFER, 0, v);
+  bindMesh(R.ribbon);
+  gl.uniformMatrix4fv(U.u_model, false, M4.create());
+  gl.uniformMatrix3fv(U.u_nmat, false, new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+  gl.uniform3f(U.u_cap, 0, 0, 0);
+  const rc = hex(0xe0283e);
+  gl.uniform3fv(U.u_color, rc); gl.uniform3fv(U.u_color2, rc);
+  gl.uniform1f(U.u_kind, 5); gl.uniform1f(U.u_texOn, 0);
+  gl.uniform1f(U.u_emit, Rb.glow * 0.6 + (Game.invite && Game.invite.kind === 'ribbon' ? 0.05 + 0.05 * Math.sin(Game.t * 3) : 0));
+  drawMesh(R.ribbon);
+  gl.uniform1f(U.u_emit, 0);
+}
+function drawParticles() {
+  const n = Math.min(Game.parts.length, MAX_PARTS);
+  if (!n) return;
+  const v = R.partVerts;
+  for (let i = 0; i < n; i++) {
+    const q = Game.parts[i], o = i * STRIDE;
+    const a = Math.sin(clamp(q.life / q.max, 0, 1) * PI);
+    v[o] = q.p[0]; v[o + 1] = q.p[1]; v[o + 2] = q.p[2];
+    v[o + 3] = q.col[0]; v[o + 4] = q.col[1]; v[o + 5] = q.col[2];
+    v[o + 8] = q.size; v[o + 9] = a * 0.85;
+  }
+  const P = R.P.part; gl.useProgram(P.p);
+  gl.uniformMatrix4fv(P.U.u_vp, false, Cam.vp);
+  gl.uniform1f(P.U.u_px, canvas.height / (2 * Math.tan(Cam.fov / 2)));
+  gl.bindBuffer(gl.ARRAY_BUFFER, R.part.vbo); gl.bufferSubData(gl.ARRAY_BUFFER, 0, v.subarray(0, n * STRIDE));
+  const S = STRIDE * 4;
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
+  gl.vertexAttribPointer(2, 2, gl.FLOAT, false, S, 24);
+  gl.vertexAttribPointer(3, 3, gl.FLOAT, false, S, 32);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+  gl.drawArrays(gl.POINTS, 0, n);
+  gl.depthMask(true); gl.disable(gl.BLEND);
+}
+
+// ===================================================================
+//  Demo hand (2D overlay, drawn procedurally once)
+// ===================================================================
+let HAND = null;
+function makeHand() {
+  const W = 160, H = 220;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  // index finger pointing down-left; fingertip hotspot at (40, 12)
+  x.translate(0, 0);
+  const skin = x.createLinearGradient(20, 0, 150, 200);
+  skin.addColorStop(0, '#f7d2b8'); skin.addColorStop(0.55, '#eab896'); skin.addColorStop(1, '#d99c7a');
+  x.shadowColor = 'rgba(20,30,60,0.35)'; x.shadowBlur = 18; x.shadowOffsetX = 6; x.shadowOffsetY = 10;
+  x.fillStyle = skin;
+  x.beginPath();
+  x.moveTo(30, 18);
+  x.quadraticCurveTo(40, 0, 54, 14);              // fingertip
+  x.lineTo(84, 92);                                 // finger right edge
+  x.quadraticCurveTo(100, 84, 112, 96);            // knuckle of middle finger
+  x.quadraticCurveTo(128, 92, 136, 108);
+  x.quadraticCurveTo(152, 108, 154, 130);
+  x.quadraticCurveTo(160, 176, 136, 206);          // palm heel
+  x.lineTo(84, 218);
+  x.quadraticCurveTo(58, 196, 56, 160);            // thumb side
+  x.quadraticCurveTo(44, 150, 40, 132);
+  x.quadraticCurveTo(38, 118, 54, 112);
+  x.lineTo(30, 18);
+  x.closePath(); x.fill();
+  x.shadowColor = 'transparent';
+  // knuckle creases & nail
+  x.strokeStyle = 'rgba(150,90,60,0.35)'; x.lineWidth = 2.5; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(52, 62); x.quadraticCurveTo(60, 58, 68, 60); x.stroke();
+  x.beginPath(); x.moveTo(108, 118); x.quadraticCurveTo(118, 122, 128, 120); x.stroke();
+  x.beginPath(); x.moveTo(132, 134); x.quadraticCurveTo(140, 140, 148, 140); x.stroke();
+  const nail = x.createLinearGradient(34, 10, 52, 34); nail.addColorStop(0, '#fbe6dc'); nail.addColorStop(1, '#efc6b4');
+  x.fillStyle = nail; x.beginPath(); x.ellipse(43, 22, 7, 11, -0.38, 0, TAU); x.fill();
+  x.fillStyle = 'rgba(255,255,255,0.35)'; x.beginPath(); x.ellipse(80, 150, 30, 40, -0.5, 0, TAU); x.fill();
+  return { c, hx: 40, hy: 12, W, H };
+}
+let overlayDirty = false;
+function drawOverlay() {
+  const D = Game.demo;
+  if (!D.on || !D.seg) { if (overlayDirty) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height); overlayDirty = false; } return; }
+  if (!HAND) HAND = makeHand();
+  const dpr = overlay.width / Math.max(1, Cam.W);
+  octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const s = D.seg, t = D.t, T = D.T;
+  const from = s.from != null ? s.from : s.a, to = s.to != null ? s.to : s.b;
+  const u = smooth(0.32, T - 0.38, t);
+  const tt = lerp(from, to, u);
+  const p = seamPoint(s.seam, tt);
+  const sp = project([p[0], 0, p[1]]);
+  const press = t > 0.25 && t < T - 0.32 ? 1 : 0;
+  const lift = t < 0.3 ? (0.3 - t) / 0.3 : (t > T - 0.32 ? (t - (T - 0.32)) / 0.32 : 0);
+  const alpha = clamp(1 - lift * 1.1, 0, 1) * 0.92;
+  const sc = clamp(Cam.W / 900, 0.42, 0.62) * (1 + lift * 0.18);
+  octx.globalAlpha = alpha;
+  octx.translate(sp[0] + lift * 10, sp[1] - lift * 26);
+  octx.scale(sc, sc);
+  octx.drawImage(HAND.c, -HAND.hx, -HAND.hy);
+  octx.globalAlpha = 1;
+  if (press) { octx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  octx.setTransform(1, 0, 0, 1, 0, 0);
+  overlayDirty = true;
+}
+
+// ===================================================================
+//  Resize, safe area, adaptive resolution
+// ===================================================================
+const safeEl = document.getElementById('safe');
+const Res = { scale: 1, maxScale: 1, frames: [], lastChange: 0, ignoreUntil: 0, ups: 0, cssW: 1, cssH: 1 };
+function readSafe() {
+  try {
+    const cs = getComputedStyle(safeEl);
+    Cam.safe = { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+  } catch (e) { Cam.safe = { t: 0, r: 0, b: 0, l: 0 }; }
+}
+function resize(force) {
+  const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
+  const changed = w !== Res.cssW || h !== Res.cssH;
+  Res.cssW = w; Res.cssH = h;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  Res.maxScale = Math.min(dpr, Math.sqrt(2.4e6 / (w * h)), 2);
+  if (changed || force) { Res.scale = Math.max(Math.min(Res.maxScale, dpr), Math.min(1.0, dpr)); Res.ignoreUntil = performance.now() + 1000; }
+  applyScale();
+  readSafe();
+  Cam.W = w; Cam.H = h;
+  if (changed || force) updateCamera(0, true);
+}
+function applyScale() {
+  const w = Res.cssW, h = Res.cssH, s = Res.scale;
+  const W = Math.round(w * s), H = Math.round(h * s);
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const od = Math.min(2, window.devicePixelRatio || 1);
+  const OW = Math.round(w * od), OH = Math.round(h * od);
+  if (overlay.width !== OW || overlay.height !== OH) { overlay.width = OW; overlay.height = OH; overlayDirty = true; }
+}
+const SCALES = [2, 1.75, 1.5, 1.25, 1.0];
+function adaptResolution(frameMs, now) {
+  if (now < Res.ignoreUntil) return;
+  const F = Res.frames; F.push(frameMs); if (F.length > 90) F.shift();
+  if (F.length < 90 || now - Res.lastChange < 2500) return;
+  const sorted = F.slice().sort((a, b) => a - b), med = sorted[45];
+  const locked30 = Math.abs(med - 33.3) < 1.5 && sorted[10] > 31; // low-power 30 Hz cap, not GPU load
+  const floor = Math.min(1.25, Res.maxScale);
+  if (med > 18.5 && !locked30 && Res.scale > floor) {
+    const next = SCALES.find(x => x < Res.scale - 0.01) || floor;
+    Res.scale = Math.max(floor, next); Res.lastChange = now; F.length = 0; applyScale(); logEv('res', { s: Res.scale });
+  } else if (med < 14 && Res.scale < Res.maxScale - 0.01 && Res.ups < 2 && now - Res.lastChange > 10000) {
+    const next = SCALES.slice().reverse().find(x => x > Res.scale + 0.01);
+    if (next) { Res.scale = Math.min(Res.maxScale, next); Res.ups++; Res.lastChange = now; F.length = 0; applyScale(); }
+  }
+}
+
+// ===================================================================
+//  Main loop: fixed 1/120 s simulation steps, rAF only
+// ===================================================================
+const STEP = 1 / 120;
+const Loop = { raf: 0, last: -1, acc: 0, running: false, frameMs: 16.7, fpsEMA: 60 };
+function simStep(dt) {
+  Game.t += dt;
+  Cl.f.fill(0);
+  kidForces();
+  traceForces();
+  updatePackets(dt);
+  clothStep(dt);
+  Game.kids.forEach(k => updateKid(k, dt));
+  updateBalls(dt);
+  // timers
+  for (let b = 0; b < 2; b++) {
+    if (Cl.linkHold[b] > 0) Cl.linkHold[b] -= dt;
+    else if (Cl.link[b] > Cl.linkBase[b]) { Cl.link[b] = Math.max(Cl.linkBase[b], Cl.link[b] - dt * 0.08); clothApplyLinks(); }
+    else if (Cl.link[b] < Cl.linkBase[b]) { Cl.link[b] = Math.min(Cl.linkBase[b], Cl.link[b] + dt * 0.5); clothApplyLinks(); }
+  }
+  if (Cl.boost > 0) Cl.boost -= dt;
+  Game.saucers.forEach(s => { s.age += dt; });
+  Game.saucers = Game.saucers.filter(s => s.age < s.life);
+  if (Game.ripple.t < 5) Game.ripple.t += dt;
+  if (Game.flash) Game.flash.age += dt;
+  if (Game.saveDue != null && Game.t >= Game.saveDue) doSave();
+}
+function frame(now) {
+  Loop.raf = 0;
+  if (!Loop.running) return;
+  Loop.raf = requestAnimationFrame(frame);
+  if (!R.ok || (gl && gl.isContextLost())) return;
+  if (Loop.last < 0) Loop.last = now;
+  const fms = now - Loop.last; Loop.last = now;
+  Loop.frameMs = fms; Loop.fpsEMA = lerp(Loop.fpsEMA, 1000 / Math.max(fms, 1), 0.05);
+  Loop.acc += Math.min(fms / 1000, 4 * STEP);
+  const tA = performance.now();
+  let steps = 0;
+  while (Loop.acc >= STEP && steps < 4) { simStep(STEP); Loop.acc -= STEP; steps++; }
+  if (steps >= 4) Loop.acc = 0;
+  const fdt = steps * STEP;
+  try {
+    logicFrame(fdt);
+    stepVisual();
+    updateClothDyn(R.cloth);
+    gatherOccluders();
+    const tB = performance.now();
+    bakeShadows();
+    drawScene();
+    drawOverlay();
+    const tC = performance.now();
+    Loop.simMs = lerp(Loop.simMs || 0, tB - tA, 0.05); Loop.drawMs = lerp(Loop.drawMs || 0, tC - tB, 0.05);
+    Loop.maxSim = Math.max((Loop.maxSim || 0) * 0.995, tB - tA);
+    adaptResolution(fms, now);
+  } catch (e) {
+    if (!Loop.errLogged) { Loop.errLogged = true; Game.lastError = String(e && e.stack || e); }
+  }
+}
+function logicFrame(fdt) {
+  updatePartners();
+  updateInvite(fdt);
+  updateBreath(fdt);
+  traceUpdate(fdt);
+  if (fdt > 0) { const n = Math.max(1, Math.round(fdt * 60)); for (let i = 0; i < n; i++) updateRibbon(fdt / n); }
+  updateParts(fdt);
+  if (Game.revealed && Game.reveal < 1) Game.reveal = Math.min(1, Game.reveal + fdt / 1.4);
+  let roll = 0; Game.balls.forEach(b => { if (b.state === 'cloth') roll += Math.hypot(b.vx, b.vz); });
+  AudioFX.setRoll(clamp(roll / 2.5, 0, 1));
+  Game.kids.forEach(k => solveKid(k));
+  // pick-up animation: the ball travels into her arms
+  Game.kids.forEach(k => { if (k.pickBall >= 0) { const b = Game.balls[k.pickBall]; const p = V.lerp(b.pickFrom, k.J.ball, smooth(0.25, 1, k.pickT)); b.x = p[0]; b.y = p[1]; b.z = p[2]; } });
+  updateCamera(fdt || 0.0001, false);
+}
+function startLoop() {
+  if (Loop.running) return;
+  Loop.running = true; Loop.last = -1; Loop.acc = 0;
+  Loop.raf = requestAnimationFrame(frame);
+}
+function stopLoop() { Loop.running = false; if (Loop.raf) cancelAnimationFrame(Loop.raf); Loop.raf = 0; }
+
+// ===================================================================
+//  Input wiring (first finger only), gesture suppression, lifecycle
+// ===================================================================
+function cssXY(e) { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+function onDown(e) {
+  if (e.cancelable) e.preventDefault();
+  AudioFX.unlock();
+  if (Game.pointer !== null) return;           // extra fingers never take over
+  if (e.button != null && e.button > 0) return;
+  Game.pointer = e.pointerId;
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  const [x, y] = cssXY(e);
+  inputDown(x, y);
+}
+function onMove(e) {
+  if (e.pointerId !== Game.pointer) return;
+  if (e.cancelable) e.preventDefault();
+  const evs = (typeof e.getCoalescedEvents === 'function' && e.getCoalescedEvents()) || [];
+  if (evs.length > 1) evs.forEach(ev => { const [x, y] = cssXY(ev); inputMove(x, y); });
+  else { const [x, y] = cssXY(e); inputMove(x, y); }
+}
+function endPointer(e, cancel) {
+  if (e && e.pointerId !== Game.pointer) return;
+  if (e && e.cancelable) e.preventDefault();
+  const id = Game.pointer; Game.pointer = null;
+  try { if (id != null && canvas.hasPointerCapture && canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id); } catch (err) { /* ignore */ }
+  inputUp(cancel);
+}
+function softRelease() { if (Game.pointer !== null) { Game.pointer = null; inputUp(true); } }
+canvas.addEventListener('pointerdown', onDown, { passive: false });
+canvas.addEventListener('pointermove', onMove, { passive: false });
+canvas.addEventListener('pointerup', (e) => { AudioFX.unlock(); endPointer(e, false); }, { passive: false });
+canvas.addEventListener('pointercancel', (e) => endPointer(e, true), { passive: false });
+canvas.addEventListener('lostpointercapture', (e) => { if (e.pointerId === Game.pointer) endPointer(e, true); });
+['touchstart', 'touchmove', 'touchend'].forEach(t => document.addEventListener(t, (e) => { if (t === 'touchend') AudioFX.unlock(); if (e.cancelable) e.preventDefault(); }, { passive: false }));
+['gesturestart', 'gesturechange', 'gestureend', 'contextmenu', 'selectstart', 'dblclick', 'dragstart'].forEach(t => document.addEventListener(t, (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false }));
+document.addEventListener('wheel', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('click', () => AudioFX.unlock());
+window.addEventListener('blur', softRelease);
+function onHidden() { softRelease(); stopLoop(); AudioFX.suspend(); if (Game.saveDue != null || Game.firstInputDone) doSave(); }
+function onVisible() { Loop.last = -1; Loop.acc = 0; Res.ignoreUntil = performance.now() + 1000; Res.frames.length = 0; Game.lastInput = Game.t; AudioFX.resume(); resize(false); startLoop(); }
+document.addEventListener('visibilitychange', () => { if (document.hidden) onHidden(); else onVisible(); });
+window.addEventListener('pagehide', onHidden);
+window.addEventListener('pageshow', (e) => { if (!document.hidden) onVisible(); });
+window.addEventListener('resize', () => { resize(false); requestAnimationFrame(() => resize(false)); setTimeout(() => resize(false), 300); });
+window.addEventListener('orientationchange', () => setTimeout(() => resize(true), 120));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => resize(false));
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); R.ok = false; stopLoop(); }, false);
+canvas.addEventListener('webglcontextrestored', () => { try { initGL(); resize(true); startLoop(); } catch (e) { Game.lastError = String(e); } }, false);
+
+// ===================================================================
+//  Test / inspection hooks (read-mostly; no UI)
+// ===================================================================
+function kneeFlex(k) {
+  if (!k.J) return 0;
+  return k.J.legs.reduce((acc, l) => {
+    const a = V.norm(V.sub(l.hip, l.knee)), b = V.norm(V.sub(l.ankle, l.knee));
+    return acc + (180 - Math.acos(clamp(V.dot(a, b), -1, 1)) * 180 / PI);
+  }, 0) / 2;
+}
+window.__pyon = {
+  game: Game, cam: Cam, cloth: Cl, seams: SEAMS, bins: BINS, res: Res, loop: Loop,
+  project: (x, y, z) => project([x, y, z]),
+  seamScreen: (id, t) => { const s = SEAMS[id]; const p = seamPoint(s, t); return project([p[0], 0, p[1]]); },
+  footSeamScreen: (i) => { const k = Game.kids[i]; const f = footSnapFor(k); return project([f.x, 0, f.z]); },
+  kidScreen: (i, part) => { const k = Game.kids[i]; return k.J ? project(k.J[part || 'head']) : null; },
+  clothH: (x, z) => clothH(x, z),
+  knee: (i) => kneeFlex(Game.kids[i]),
+  crouch: (i) => Game.kids[i].crouch,
+  setNoIdle: (b) => { Game.testNoIdle = !!b; },
+  audioState: () => AudioFX.state(),
+  // headless fast-forward for automated play tests (no drawing): advances sim time deterministically
+  pause: () => stopLoop(), resume: () => startLoop(),
+  advance: (sec) => { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) { simStep(STEP); simStep(STEP); logicFrame(2 * STEP); } return Game.t; },
+  input: { down: (x, y) => { AudioFX.unlock(); if (Game.pointer !== null) return; Game.pointer = 999; inputDown(x, y); }, move: (x, y) => { if (Game.pointer === 999) inputMove(x, y); }, up: (cancel) => { if (Game.pointer === 999) { Game.pointer = null; inputUp(!!cancel); } } },
+  summary: () => ({
+    t: +Game.t.toFixed(2), kids: Game.kids.map(k => ({ id: k.id, x: +k.x.toFixed(2), z: +k.z.toFixed(2), state: k.state, seated: k.seated, holding: k.holding, H: k.air ? +k.air.H.toFixed(2) : 0 })),
+    balls: Game.balls.map(b => ({ i: b.i, x: +b.x.toFixed(2), z: +b.z.toFixed(2), state: b.state, owner: b.owner })),
+    stats: Object.assign({}, Game.stats), link: Cl.link.slice(), reveal: +Game.reveal.toFixed(2), invite: Game.invite ? { kind: Game.invite.kind, seam: Game.invite.seam.id, a: +Game.invite.a.toFixed(2), b: +Game.invite.b.toFixed(2) } : null,
+    saucers: Game.saucers.length, packets: Game.packets.length, loadState: Game.loadState, saveState: Game.saveState, scale: Res.scale, fps: +Loop.fpsEMA.toFixed(1), simMs: +(Loop.simMs || 0).toFixed(2), drawMs: +(Loop.drawMs || 0).toFixed(2), maxSimMs: +(Loop.maxSim || 0).toFixed(2), err: Game.lastError || null, demo: Game.demo.on, breath: Game.breath.t,
+  }),
+};
+
+// ===================================================================
+//  Boot
+// ===================================================================
+(function boot() {
+  const save = loadSave();
+  setupWorld(save);
+  if (!gl) { document.getElementById('fallback').style.display = 'block'; Game.lastError = 'nogl'; return; }
+  try { initGL(); }
+  catch (e) { Game.lastError = String(e && e.message || e); document.getElementById('fallback').style.display = 'block'; return; }
+  resize(true);
+  Game.kids.forEach(k => solveKid(k));
+  updateCamera(0, true);
+  startLoop();
+})();
+</script>
+</body>
+</html>
