@@ -123,6 +123,7 @@ const INK=[
 //  storage (all guarded)
 // =====================================================================
 const STORE_KEY='kk-hanataba-261110-6';
+const PNG_RE=/^data:image\/png;base64,[A-Za-z0-9+\/]+={0,2}$/;
 const store={ok:true,lastErr:null};
 function storeLoad(){
   let raw=null;
@@ -136,8 +137,8 @@ function storeLoad(){
     if(typeof d.phi==='number'&&isFinite(d.phi))out.phi=((d.phi%360)+360)%360;
     if(typeof d.plays==='number'&&isFinite(d.plays))out.plays=clamp(Math.floor(d.plays),0,1e6);
     if(Array.isArray(d.memorials))for(const m of d.memorials.slice(0,4)){
-      if(m&&typeof m.f==='string'&&m.f.indexOf('data:image/png;base64,')===0&&m.f.length<400000&&
-         typeof m.b==='string'&&m.b.indexOf('data:image/png;base64,')===0&&m.b.length<400000)
+      if(m&&typeof m.f==='string'&&m.f.length<400000&&PNG_RE.test(m.f)&&
+         typeof m.b==='string'&&m.b.length<400000&&PNG_RE.test(m.b))
         out.memorials.push({id:String(m.id||('m'+out.memorials.length)).slice(0,40),f:m.f,b:m.b});}
     return out;
   }catch(e){store.lastErr='parse';try{window.localStorage.removeItem(STORE_KEY);}catch(e2){}return null;}
@@ -1645,7 +1646,7 @@ function saveWork(){
 function loadMemorials(){
   for(const m of persist.memorials){const rec={id:m.id,cf:null,cb:null,texF:null,texB:null};memorials.push(rec);
     let n=0;const fin=()=>{n++;if(n===2&&glOK){try{rec.texF=texFrom(rec.cf,false,true);rec.texB=texFrom(rec.cb,false,true);}catch(e){}}};
-    const ld=(src,key)=>{const im=new Image();im.onload=()=>{const c=mkC(256,256);c.getContext('2d').drawImage(im,0,0,256,256);rec[key]=c;fin();};im.onerror=()=>{const i=memorials.indexOf(rec);if(i>=0)memorials.splice(i,1);};im.src=src;};
+    const ld=(src,key)=>{const im=new Image();im.onload=()=>{const c=mkC(256,256);c.getContext('2d').drawImage(im,0,0,256,256);rec[key]=c;fin();};im.onerror=()=>{const i=memorials.indexOf(rec);if(i>=0)memorials.splice(i,1);persist.memorials=persist.memorials.filter(q=>q.id!==rec.id);};im.src=src;};
     ld(m.f,'cf');ld(m.b,'cb');}
 }
 function boot(){
