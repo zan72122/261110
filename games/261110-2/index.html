@@ -328,6 +328,19 @@ float occShadow(vec3 p){
   }
   return s;
 }
+// light-independent contact darkening under things resting on / just above the cloth
+float occAO(vec3 p){
+  float s = 1.0;
+  for (int i = 0; i < 18; i++) {
+    if (float(i) >= u_nocc) break;
+    vec4 o = u_occ[i];
+    float h = o.y - p.y;
+    if (h <= 0.0 || h > 0.32) continue;
+    float d = length(p.xz - o.xz);
+    s = min(s, 1.0 - 0.38 * (1.0 - smoothstep(0.0, 1.7 * o.w + 0.05, d)) * (1.0 - h / 0.32));
+  }
+  return s;
+}
 float tubes(vec3 p, vec3 R, float blur){
   if (R.y < 0.01) return 0.0;
   float t = (6.2 - p.y) / R.y;
@@ -368,6 +381,7 @@ const FS_ENV = GLSL_COMMON + `
 varying vec3 v_wp; varying vec3 v_n; varying vec2 v_uv; varying vec3 v_ext;
 uniform vec2 u_link;
 uniform float u_reveal;
+uniform vec2 u_sweep;
 uniform vec2 u_bounds;
 uniform vec4 u_ripple; // x,z,age,strength (unrelated touch wobble)
 float rectSD(vec2 p, vec2 h){ vec2 d = abs(p) - h; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
@@ -419,8 +433,10 @@ void main(){
     base *= 0.9 + 0.1 * smoothstep(0.0, 0.02, edge);
     spec = 0.11; blur = 0.09;
     // reveal glow sweep along the frame
-    float sweep = u_reveal * (1.0 - u_reveal) * 4.0;
-    extra += vec3(0.25, 0.35, 0.6) * sweep * 0.25;
+    // a soft light runs once around the whole frame when it is revealed as one
+    float ang = atan(P.z, P.x);
+    float run = 1.0 - smoothstep(0.0, 0.9, abs(mod(ang - u_sweep.y * 6.2832 + 3.1416, 6.2832) - 3.1416));
+    extra += vec3(0.30, 0.42, 0.75) * u_sweep.x * (0.25 + 0.75 * run) * 0.35;
   } else if (kind < 5.5) { // metal frame
     base = vec3(0.50, 0.53, 0.56);
     spec = 0.9; blur = 0.015; rough = 0.15;
@@ -726,7 +742,7 @@ void main(){ v_xz = vec2(u_shwR.x + a_uv.x / u_shwR.z, u_shwR.y + a_uv.y / u_shw
 const FS_SHWQ = GLSL_COMMON + `
 varying vec2 v_xz;
 uniform float u_floorY;
-void main(){ gl_FragColor = vec4(occShadow(vec3(v_xz.x, 0.07, v_xz.y)), occShadow(vec3(v_xz.x, u_floorY, v_xz.y)), 1.0, 1.0); }
+void main(){ vec3 a = vec3(v_xz.x, 0.07, v_xz.y), b = vec3(v_xz.x, u_floorY, v_xz.y); gl_FragColor = vec4(min(occShadow(a), occAO(a)), occShadow(b), 1.0, 1.0); }
 `;
 const VS_SHWC = `
 attribute vec2 a_xz; attribute vec4 a_h;
@@ -736,7 +752,7 @@ void main(){ v_wp = vec3(a_xz.x, a_h.x, a_xz.y); vec2 uv = vec2((a_xz.x - u_shwR
 `;
 const FS_SHWC = GLSL_COMMON + `
 varying vec3 v_wp;
-void main(){ gl_FragColor = vec4(occShadow(v_wp), 0.0, 0.0, 1.0); }
+void main(){ gl_FragColor = vec4(min(occShadow(v_wp), occAO(v_wp)), 0.0, 0.0, 1.0); }
 `;
 // ---------------------------------------------------------------------------
 // AudioFX: fully synthesized Web Audio effects (no files, no samples, no network).
@@ -750,6 +766,8 @@ const AudioFX = (function () {
 
   var MAX_VOICES = 12;
   var MASTER_GAIN = 0.55;
+  // per-sound balance: successes stand clearly above rubbing and waves
+  var LEVEL = { ribbon: 2.1, catch: 2.4, pick: 3.5, giggle: 1.8, plop: 1.7, wobble: 1.5, wave: 0.55, throw: 0.8, breath: 1.4 };
   var LOOP_IDLE_MS = 2200; // continuous loops are torn down after this much silence
 
   var ctx = null, bus = null, master = null, noiseBuf = null;
@@ -876,7 +894,7 @@ const AudioFX = (function () {
     }
     lastPlay[name] = now;
     var t = now + 0.01;
-    var out = ctx.createGain(); out.gain.value = 1;
+    var out = ctx.createGain(); out.gain.value = LEVEL[name] || 1;
     var v = { t: t, end: t + dur, prio: prio, out: out, nodes: [out], srcs: [], stops: [], live: 0, done: false, stolen: false };
     if (pan && hasPanner) {
       var p = ctx.createStereoPanner();
@@ -1103,7 +1121,7 @@ const AudioFX = (function () {
     var q = 0.8 + 1.8 * d;
     // loudness mostly from speed; compensate for band width so lows are not lost
     // (and for the narrower band at higher Q)
-    var gn = (0.03 + 0.78 * Math.pow(s, 0.7)) * Math.sqrt(700 / fc) * Math.sqrt(q / 0.8) * 0.85;
+    var gn = (0.03 + 0.78 * Math.pow(s, 0.7)) * Math.sqrt(700 / fc) * Math.sqrt(q / 0.8) * 0.6;
     if (gn > 1.2) gn = 1.2;
     var hf = 210 - 80 * d;
     var hgn = d > 0.04 ? 0.065 * Math.pow(d, 1.2) : 0;
@@ -2052,8 +2070,8 @@ function kidDrawList(k, list) {
 const GRAV = 7.2;               // child jump gravity (slightly floaty for readability)
 const RANGE = 0.5;              // trace bins within this of a kid's ground point affect the kid
 const WIDE_L = 1.05;            // covered length >= this -> soft wide trace (saucer)
-const RIBBON_TIP = 1.66;
-const RIBBON_H = 0.66;          // jump height that lets the protagonist's hand touch the ribbon
+const RIBBON_TIP = 1.6;
+const RIBBON_H = 0.62;          // jump height that lets the protagonist's hand touch the ribbon
 const SAVE_KEY = 'pyon-261110-2-v1';
 const SEAT_X = 1.5, SEAT_Z0 = -0.75, SEAT_Z1 = 0.6;
 const BALL_X = 1.7, BALL_Z = 0.95;
@@ -2492,7 +2510,20 @@ function throwBall(k) {
   const p1 = rk.J ? V.lerp(rk.J.arms[0].hand, rk.J.arms[1].hand, 0.5) : [rk.x, 0.8, rk.z];
   const d = V.dist(p0, p1);
   b.state = 'fly'; b.owner = -1;
-  b.fly = { t: 0, T: 0.55 + d * 0.13, p0, p1, arc: 0.35 + d * 0.12, to: rk.id, from: k.id };
+  // lift the arc over anyone standing in between
+  let arc = 0.35 + d * 0.12;
+  Game.kids.forEach(o => {
+    if (o === k || o === rk) return;
+    const ax = p1[0] - p0[0], az = p1[2] - p0[2], L2 = ax * ax + az * az || 1;
+    const u = clamp(((o.x - p0[0]) * ax + (o.z - p0[2]) * az) / L2, 0, 1);
+    const cx = p0[0] + ax * u, cz = p0[2] + az * u;
+    if (Math.hypot(o.x - cx, o.z - cz) < 0.4) {
+      const top = o.rootY + (o.seated ? 0.75 : 1.32) * o.def.scale + 0.25;
+      const base = lerp(p0[1], p1[1], u), lift = Math.sin(u * PI) || 0.1;
+      arc = Math.max(arc, (top - base) / lift);
+    }
+  });
+  b.fly = { t: 0, T: 0.55 + d * 0.13 + Math.max(0, arc - 0.6) * 0.25, p0, p1, arc, to: rk.id, from: k.id };
   k.holding = -1; k.throwT = 0.01;
   rk.excitedT = 1.0;
   AudioFX.throwBall();
@@ -2667,8 +2698,9 @@ function computeFrames() {
   const base = [];
   const R = Game.ribbon;
   const rx = R ? R.tx : 0;
-  base.push([rx, RIBBON_TIP + 0.42, KID_Z], [rx, RIBBON_TIP - 0.05, KID_Z]);
-  { const g = Game.kids[0]; if (g && !g.seated) base.push([g.baseX, RIBBON_TIP + 0.55, g.baseZ]); } // head room for the jump
+  const shortScreen = !side && H < 520; // phone held sideways: keep the children large, show less ceiling
+  base.push([rx, RIBBON_TIP + (shortScreen ? 0.15 : 0.42), KID_Z], [rx, RIBBON_TIP - 0.05, KID_Z]);
+  { const g = Game.kids[0]; if (g && !g.seated && !shortScreen) base.push([g.baseX, RIBBON_TIP + 0.55, g.baseZ]); } // head room for the jump
   Game.kids.forEach(k => {
     const ux = k.state === 'ground' ? k.x : k.baseX, uz = k.state === 'ground' ? k.z : k.baseZ;
     base.push([ux - 0.3, 0, uz], [ux + 0.3, 0, uz], [ux, k.seated ? 0.8 : 1.24, uz], [ux, 0, uz + 0.36]);
@@ -2695,7 +2727,7 @@ function computeFrames() {
   const narrow = mk(base, 0);
   const wideF = mk(wide, 0.03);
   // widen only "a little": never more than ~22% further than the narrow framing
-  wideF.d = Math.min(wideF.d, narrow.d * 1.22);
+  wideF.d = Math.min(wideF.d, narrow.d * (side ? 1.5 : 1.25));
   return { narrow, wide: wideF };
 }
 function updateCamera(dt, force) {
@@ -2765,6 +2797,8 @@ function snapSeam(sx, sy, prefer) {
     if (prefer === s) tol = Math.max(tol, clamp(ppm * 0.28, 32, 52)) * 1.35;
     let score = dpx / tol;
     if (prefer && s === prefer) score *= 0.6;
+    const inv = Game.invite;
+    if (!prefer && inv && inv.seam === s && t >= inv.a - 0.2 && t <= inv.b + 0.2) score = score * 0.8 - 0.01; // ties at crossings go to the invited seam
     if (dpx <= tol && (!best || score < best.score)) best = { s, t, x: p[0], z: p[1], dpx, score };
   }
   return best;
@@ -2783,6 +2817,15 @@ function hitKid(sx, sy) {
     if (d < 1 && (!best || d < best.d)) best = { k, d, legs: dL <= dU, z: pp[2] };
   }
   return best;
+}
+function hitFreeBall(sx, sy) {
+  for (const b of Game.balls) {
+    if (b.state !== 'cloth') continue;
+    const p = project([b.x, b.y, b.z]);
+    const rpx = pxPerMeterAt(b.x, b.z) * b.r;
+    if (Math.hypot(p[0] - sx, p[1] - sy) < Math.max(12, rpx * 0.95)) return b;
+  }
+  return null;
 }
 function footSnapFor(k) {
   const s = nearestHSeamFor(k.z + 0.22);
@@ -2822,9 +2865,13 @@ function inputDown(sx, sy) {
   Game.firstInputDone = true;
   Game.hopsSinceInput = 0;
   const hk = hitKid(sx, sy);
+  const hb = hk ? null : hitFreeBall(sx, sy);
   let sn = snapSeam(sx, sy, null);
-  if (hk && hk.legs && (!sn || sn.dpx > 12)) sn = footSnapFor(hk.k);
-  if (sn && !(hk && !hk.legs && sn.dpx > 14)) startTrace(sn, sx, sy);
+  // a child's body hides the cloth behind it: touching her legs presses the seam at her feet,
+  // touching her upper body (or the ball in her arms) is only a small reaction; a free ball just hops
+  if (hk && hk.legs) sn = footSnapFor(hk.k);
+  else if (hk || hb) sn = null;
+  if (sn) startTrace(sn, sx, sy);
   else {
     Game.trace = { active: true, snapped: false, pending: true, sx, sy, covered: new Set(), binT: new Map(), hx: {}, crossed: [false, false], along: [0, 0], startT: Game.t };
     unrelatedTouch(sx, sy, hk ? hk.k : null);
@@ -2839,6 +2886,7 @@ function startTrace(sn, sx, sy) {
   };
   Game.trace = tr;
   markBins(tr, sn.s, sn.t - 0.05, sn.t + 0.05);
+  tr.initBins = [...tr.covered]; tr.initSeam = sn.s;
   clothImpulse(sn.x, sn.z, 0.12, 0.7);
   // the nearest child always answers the touch with a knee bend
   let nk = null, nd = 1e9;
@@ -2864,6 +2912,12 @@ function inputMove(sx, sy) {
   if (!tr.snapped) { tr.snapped = true; tr.seam = sn.s; tr.t = sn.t; tr.x = sn.x; tr.z = sn.z; markBins(tr, sn.s, sn.t, sn.t); return; }
   if (sn.s !== tr.seam) {
     const a = tr.seam, b = sn.s;
+    // started right on a crossing and went the other way: the first guess of seam does not count
+    if (tr.initBins && a === tr.initSeam && Math.hypot(sn.x - tr.sx0, sn.z - tr.sz0) < 0.25) {
+      tr.initBins.forEach(bi => tr.covered.delete(bi));
+      if (a.axis === 0) delete tr.hx[a.id]; else { const bb = a.c < 0 ? 0 : 1; if (a.boundary) tr.along[bb] = 0; }
+      tr.initBins = null;
+    }
     if (a.axis !== b.axis) {
       const ix = a.axis === 0 ? b.c : a.c, iz = a.axis === 0 ? a.c : b.c;
       markBins(tr, a, tr.t, seamParam(a, ix, iz));
@@ -2966,8 +3020,9 @@ function unrelatedTouch(sx, sy, body) {
     return;
   }
   for (const b of Game.balls) {
+    if (b.state !== 'cloth') continue;
     const p = project([b.x, b.y, b.z]);
-    if (Math.hypot(p[0] - sx, p[1] - sy) < 26) {
+    if (Math.hypot(p[0] - sx, p[1] - sy) < Math.max(14, pxPerMeterAt(b.x, b.z) * b.r)) {
       if (b.state === 'cloth') { b.vy = 0.6; b.hop = 1; }
       AudioFX.tick(clamp(b.x / 2, -1, 1)); logEv('unrelated', { what: 'ball' }); return;
     }
@@ -3118,8 +3173,10 @@ function updateKid(k, dt) {
   const hp = kidHeadPos(k);
   const dx = g[0] - hp[0], dy = g[1] - hp[1], dz = g[2] - hp[2];
   const yawG = Math.atan2(dx, dz) - k.yaw, pitG = Math.atan2(dy, Math.hypot(dx, dz));
-  // keep the face toward the viewer: the head only dips a little, the eyes do the rest of a downward look
-  const yawC = clamp(yawG, -1.1, 1.1), pitC = clamp(pitG, -0.75, 0.65);
+  // keep the face toward the viewer: the head turns at most ~55° away from the camera and only dips a little;
+  // the eyes do the rest of the look
+  const camRel = angDiff(Math.atan2(Cam.eye[0] - k.x, Cam.eye[2] - k.z), k.yaw);
+  const yawC = clamp(clamp(yawG, -1.1, 1.1), camRel - 0.95, camRel + 0.95), pitC = clamp(pitG, -0.75, 0.65);
   k.headYaw = damp(k.headYaw, yawC * 0.72, 7, dt); k.headPitch = damp(k.headPitch, Math.max(pitC * 0.6, -0.22), 7, dt);
   k.eyeYaw = damp(k.eyeYaw, clamp(yawG - k.headYaw, -0.45, 0.45), 14, dt);
   k.eyePitch = damp(k.eyePitch, clamp(pitG - k.headPitch, -0.42, 0.3), 14, dt);
@@ -3169,11 +3226,12 @@ function gazeTarget(k) {
   const inv = Game.invite;
   const ph = (k.time * 0.4 + k.id * 0.37) % 1;
   if (k.id === 0 && !k.seated && ph < 0.4 && underRibbon(k)) return [R.x, RIBBON_TIP + 0.15, KID_Z];
-  if (inv) { const c = seamPoint(inv.seam, (inv.a + inv.b) / 2); return [c[0], 0, c[1]]; }
+  if (inv) { const c = seamPoint(inv.seam, (inv.a + inv.b) / 2); return [c[0], 0.25, c[1]]; }
   return [Cam.eye[0], 0.6, Cam.eye[2]];
 }
 function updatePartners() {
   Game.kids.forEach(k => { k.reachFor = null; k.partner = -1; });
+  Game.balls.forEach(b => { if (b.state === 'fly' && b.fly) { const r = Game.kids[b.fly.to], f = Game.kids[b.fly.from]; if (r && f) r.reachFor = f; } });
   Game.kids.forEach(k => {
     if (k.holding < 0) return;
     const p = pickPartner(k);
@@ -3246,10 +3304,14 @@ function computeInvite() {
   const airK = K.filter(k => k.state === 'air'), pend = K.find(k => k.pending);
   const chainOn = (airK.some(k => k.air.cause === 'chain') || pend);
   // a chain is bouncing: one fixed wide catch under the protagonist (or whoever is in it)
+  if (!chainOn) Game.chainCatch = null;
   if (chainOn && st.chainLaunches >= 2 && st.chainAbsorbs < 2) {
-    const k = [girl].concat(K).find(k => k.state === 'air' || k.pending) || girl;
-    const fk = { x: k.air ? k.air.x1 : k.x, z: k.air ? k.air.z1 : k.z };
-    return Object.assign(footInvite(fk, 0.6, 'catch'), { kid: k.id });
+    if (!Game.chainCatch) {
+      const k = [girl].concat(K).find(k => k.state === 'air' || k.pending) || girl;
+      const fk = { x: k.air ? k.air.x1 : k.x, z: k.air ? k.air.z1 : k.z };
+      Game.chainCatch = Object.assign(footInvite(fk, 0.6, 'catch'), { kid: k.id });
+    }
+    return Game.chainCatch;
   }
   if (airK.length && Game.invite) return Game.invite; // keep the target still while someone is in the air
   if (K.every(k => k.seated && k.holding >= 0)) return null; // everyone settled with a ball: the rest moment comes
@@ -3309,12 +3371,15 @@ function updateInvite(dt) {
     const same = nv && Game.invite && nv.seam === Game.invite.seam && Math.abs(nv.a - Game.invite.a) < 0.12 && Math.abs(nv.b - Game.invite.b) < 0.12;
     const dwell = Game.t - Game.inviteSince;
     const urgent = nv && (nv.kind === 'catch' || (Game.invite && Game.invite.kind === 'catch'));
-    if (!same && (dwell > 1.5 || urgent || !Game.invite || !nv)) { Game.invite = nv; Game.inviteSince = Game.t; Game.demo.on = false; }
+    if (!same && (dwell > 1.5 || urgent || !Game.invite || !nv)) {
+      Game.invite = nv; Game.inviteSince = Game.t;
+      if (Game.demo.on) { Game.demo.on = false; Game.demo.shown = false; Game.demoHold = Game.t + 1.0; } // replay once the new target settles
+    }
     else if (same && nv) Object.assign(Game.invite, { kind: nv.kind, from: nv.from, to: nv.to });
     Game.inviteT = 0.3;
   }
   const D = Game.demo;
-  if (!D.on && !D.shown && Game.invite && !Game.trace && Game.t - Game.lastInput > 4.0 && Game.t > 2.0 && !Game.testNoIdle) {
+  if (!D.on && !D.shown && Game.invite && !Game.trace && Game.t - Game.lastInput > 4.0 && Game.t > 2.0 && !Game.testNoIdle && Game.t > (Game.demoHold || 0)) {
     D.on = true; D.shown = true; D.t = 0; D.seg = Object.assign({}, Game.invite);
     D.T = D.seg.wide ? 2.1 : 1.35;
     logEv('demo', { kind: D.seg.kind });
@@ -3599,7 +3664,9 @@ function drawScene() {
   let P = R.P.env; gl.useProgram(P.p); setCommon(P);
   gl.uniformMatrix4fv(P.U.u_vp, false, Cam.vp);
   gl.uniform2f(P.U.u_link, Cl.link[0], Cl.link[1]);
-  gl.uniform1f(P.U.u_reveal, Game.reveal);
+  const ra = Game.revealed ? (Game.revealAge || 0) : 0;
+  gl.uniform1f(P.U.u_reveal, Game.revealed ? Math.min(1, ra / 1.4) : 0);
+  gl.uniform2f(P.U.u_sweep, ra > 0 && ra < 2.6 ? Math.sin(PI * ra / 2.6) : 0, ra / 2.6);
   gl.uniform2f(P.U.u_bounds, BOUNDS[0], BOUNDS[1]);
   const rp = Game.ripple; gl.uniform4f(P.U.u_ripple, rp.x, rp.z, rp.t, rp.t < 0.8 ? rp.s * (1 - rp.t / 0.8) : 0);
   bindMesh(R.env); drawMesh(R.env);
@@ -3661,7 +3728,7 @@ function drawScene() {
 }
 function drawRibbon(U) {
   const Rb = Game.ribbon, pts = Rb.pts, n = pts.length, v = R.ribbonVerts;
-  const w = 0.036;
+  const w = 0.05;
   for (let i = 0; i < n; i++) {
     const p = pts[i].p;
     const a = pts[Math.max(0, i - 1)].p, b = pts[Math.min(n - 1, i + 1)].p;
@@ -3897,7 +3964,12 @@ function logicFrame(fdt) {
   traceUpdate(fdt);
   if (fdt > 0) { const n = Math.max(1, Math.round(fdt * 60)); for (let i = 0; i < n; i++) updateRibbon(fdt / n); }
   updateParts(fdt);
-  if (Game.revealed && Game.reveal < 1) Game.reveal = Math.min(1, Game.reveal + fdt / 1.4);
+  // the reveal: pull back to show the whole frame and one continuous sheet, then settle a little wider than before
+  if (Game.revealed) {
+    Game.revealAge = (Game.revealAge || 0) + fdt;
+    const tgt = Game.revealAge < 4.5 ? 1 : 0.35;
+    Game.reveal = tgt > Game.reveal ? Math.min(tgt, Game.reveal + fdt / 1.4) : Math.max(tgt, Game.reveal - fdt / 2.5);
+  }
   let roll = 0; Game.balls.forEach(b => { if (b.state === 'cloth') roll += Math.hypot(b.vx, b.vz); });
   AudioFX.setRoll(clamp(roll / 2.5, 0, 1));
   Game.kids.forEach(k => solveKid(k));
