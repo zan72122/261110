@@ -1015,9 +1015,10 @@ function captureMemorial(){
   let f=null,b=null;try{f=cf.toDataURL('image/png');b=cb.toDataURL('image/png');}catch(e){}
   return {m,f,b};
 }
+function dropMemTex(m){if(!m||!gl||!glOK)return;try{if(m.texF)gl.deleteTexture(m.texF);if(m.texB)gl.deleteTexture(m.texB);}catch(e){}m.texF=m.texB=null;}
 function addMemorial(cap,replaceId,visual){
   if(visual!==false){const i=replaceId?memorials.findIndex(q=>q.id===replaceId):-1;
-    if(i>=0)memorials[i]=cap.m;else{memorials.unshift(cap.m);if(memorials.length>4)memorials.pop();}}
+    if(i>=0){dropMemTex(memorials[i]);memorials[i]=cap.m;}else{memorials.unshift(cap.m);if(memorials.length>4)dropMemTex(memorials.pop());}}
   if(cap.f&&cap.b){const j=persist.memorials.findIndex(q=>q.id===cap.m.id);const e={id:cap.m.id,f:cap.f,b:cap.b};
     if(j>=0)persist.memorials[j]=e;else{persist.memorials.unshift(e);persist.memorials=persist.memorials.slice(0,4);}}
   persistNow();
@@ -1037,7 +1038,7 @@ function sendAside(){
   st.sendAside=true;st.busy=2.2;SND.whoosh();logEv('sendAside');
   const cap=st.cyc.cap||captureMemorial();
   st.fly={u:0,from:paperModel(),cap,b0:st.beta};
-  tlAdd(0,1.25,(u)=>{st.fly.u=easeIO(u);},()=>{if(st.cyc.cap===cap){memorials.unshift(cap.m);if(memorials.length>4)memorials.pop();}else addMemorial(cap,null);st.fly=null;SND.kotsun(0.75);});
+  tlAdd(0,1.25,(u)=>{st.fly.u=easeIO(u);},()=>{if(st.cyc.cap===cap){memorials.unshift(cap.m);if(memorials.length>4)dropMemTex(memorials.pop());}else addMemorial(cap,null);st.fly=null;SND.kotsun(0.75);});
   tlAdd(0.05,0.01,null,()=>{for(const s of [SF.topF,SF.topB]){s.x.setTransform(1,0,0,1,0,0);s.x.clearRect(0,0,s.N,s.M);s.dirty=true;}st.newPaper=1;});
   tlAdd(0.3,0.9,(u)=>{st.beta=lerp(st.fly?st.fly.b0:st.beta,0,easeIO(u));},()=>{st.beta=0;});
   tlAdd(0.5,0.6,(u)=>{st.newPaper=1-easeOut(u);},()=>{st.newPaper=0;SND.paper();});
