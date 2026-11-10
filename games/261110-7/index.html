@@ -4007,13 +4007,29 @@ function frameCamera() {
   camera.position.copy(tgt).addScaledVector(best.dir, best.d);
   camera.lookAt(tgt);
   camera.updateProjectionMatrix(); camera.updateMatrixWorld();
-  // vertically centre the box within the safe rect
-  let minY = 9, maxY = -9, minX = 9, maxX = -9;
-  for (const c of corners) { const p = c.clone().project(camera); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
-  const midSafeY = (sy0 + sy1) / 2, midY = (minY + maxY) / 2;
-  const midSafeX = (sx0 + sx1) / 2, midX = (minX + maxX) / 2;
-  camera.setViewOffset(w, h, -(midSafeX - midX) * w / 2, (midSafeY - midY) * h / 2, w, h);
-  camera.updateProjectionMatrix();
+  // Centre the actual lever pad, then fit the whole mechanism around it.
+  // Empty table space remains inactive; the centre touch hits the lever.
+  const anchor = knobWorld().clone();
+  let near = best.d, far = 600;
+  function placeLever(d) {
+    camera.clearViewOffset();
+    camera.position.copy(tgt).addScaledVector(best.dir, d);
+    camera.lookAt(tgt); camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+    const p = anchor.clone().project(camera);
+    camera.setViewOffset(w, h, p.x * w / 2, -p.y * h / 2, w, h);
+    camera.updateProjectionMatrix();
+  }
+  for (let i = 0; i < 32; i++) {
+    const d = (near + far) / 2;
+    placeLever(d);
+    const fits = corners.every(c => {
+      const p = c.clone().project(camera);
+      return p.z <= 1 && p.x >= sx0 && p.x <= sx1 && p.y >= sy0 && p.y <= sy1;
+    });
+    if (fits) far = d; else near = d;
+  }
+  best.d = far;
+  placeLever(best.d);
   scene.fog.near = best.d + 60; scene.fog.far = best.d + 220;
 }
 
@@ -6107,14 +6123,16 @@ function updateMechanics(dt) {
   lv.axle.rotation.x = lv.bend.x * 0.06;                 // flex under the finger
   const bo = Math.max(0, lv.bounce.x), pr = Math.max(0, lv.press.x);
   lv.knobG.position.y = 0.5 + bo * 3.4 - pr * 0.9;       // ready hop (~0.8 cm) / pressed down
-  const sq = 1 + pr * 0.12 + Math.abs(lv.bend.x) * 0.03;
+  // Let a short flick visibly settle; keep the pressed response while held.
+  const feedback = Math.max(pr, Hint.flash);
+  const sq = 1 + feedback * 0.3 + Math.abs(lv.bend.x) * 0.03;
   lv.knobG.scale.set(sq, (1 / sq) * (1 + bo * 0.5), sq);
-  Hint.flash = Math.max(0, Hint.flash - dt * 3);
+  Hint.flash = Math.max(0, Hint.flash - dt * 0.5);
   if (lv.plateJig) { lv.plateJig = Math.max(0, lv.plateJig - dt * 4); lv.plate.rotation.y = Math.sin(lv.plateJig * 30) * 0.1 * lv.plateJig; }
   // knob glow when a ball is ready
   const ready = canSend();
   Hint.glow += ((ready ? 1 : 0) - Hint.glow) * Math.min(1, dt * 4);
-  MAT.knob.emissive.setRGB(0.35 * Hint.glow * (0.6 + 0.4 * Math.sin(Clock.t * 4)) + 0.5 * Hint.flash, 0.12 * Hint.glow + 0.3 * Hint.flash, 0.1 * Hint.flash);
+  MAT.knob.emissive.setRGB(0.35 * Hint.glow * (0.6 + 0.4 * Math.sin(Clock.t * 4)) + 0.5 * feedback, 0.12 * Hint.glow + 0.3 * feedback, 0.1 * feedback);
   updateCranks();
 }
 
