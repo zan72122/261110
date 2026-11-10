@@ -204,6 +204,7 @@ const SND={
     osc('sine',880*p,t,0.002,0.22,0.09,820*p);osc('sine',2440*p,t,0.001,0.06,0.04);
     nz('highpass',3200,0.7,t,0.001,0.08,0.012);},
   tick(){if(!auLive())return;const t=auT();osc('sine',1700,t,0.001,0.045,0.025);nz('highpass',4000,0.7,t,0.001,0.03,0.008);},
+  click(f,g){if(!auLive())return;const t=auT();osc('triangle',f,t,0.001,g,0.03);},
   soft(){if(!auLive())return;const t=auT();osc('sine',420,t,0.002,0.06,0.06,380);},
   peel(){if(!auLive())return;const t=auT();for(let i=0;i<5;i++)nz('bandpass',2200+i*400,1.2,t+i*0.022,0.002,0.12-i*0.015,0.03);
     osc('sine',300,t,0.004,0.08,0.12,520);},
@@ -386,11 +387,24 @@ function paintStack(stack,img,C,upDeg,w,h,alpha,phi){
     // lower layer only through holes: test hole proximity
     const mu=mapper(stack.under,null,phi);
     let near=false;for(const hh of L.holes){const wp=topWorld(hh.u,hh.v,stack.mode,phi),d=Math.hypot(wp[0]-C[0],wp[1]-C[1]);if(d<hh.r+Math.max(w,h)*0.55)near=true;}
-    if(near){drawImgOn(stack.under,mu,img,R,alpha,null,(x)=>holeClip(x,mu,stack.mode,phi,stack.under.k,0));res.hole=true;res.under=true;}
+    if(near){drawImgOn(stack.under,mu,img,R,alpha,null,(x)=>holeClip(x,mu,stack.mode,phi,stack.under.k,0));res.under=true;res.holeInk=holeInkFrac(img,R,stack.mode,phi);res.hole=res.holeInk>0.04;}
   }else{
     const mu=mapper(stack.under,null,phi);drawImgOn(stack.under,mu,img,R,alpha);res.under=true;
   }
   return res;
+}
+// fraction of each hole area that the mark actually covers (ink that really reaches the lower paper)
+const holeC=mkC(24,24),holeX=holeC.getContext('2d',{willReadFrequently:true});
+function holeInkFrac(img,R,mode,phi){
+  let best=0;
+  for(const h of L.holes){const w=topWorld(h.u,h.v,mode,phi),r=h.r,ox=w[0]-r,oz=w[1]-r,k=24/(2*r);
+    const mp=(W)=>[(W[0]-ox)*k,(W[1]-oz)*k];
+    const m=aff3(mp(R.W0),mp(R.W1),mp(R.W2),img.width,img.height);
+    holeX.setTransform(1,0,0,1,0,0);holeX.clearRect(0,0,24,24);holeX.save();holeX.beginPath();holeX.arc(12,12,12,0,TAU);holeX.clip();
+    holeX.setTransform(m[0],m[1],m[2],m[3],m[4],m[5]);holeX.drawImage(img,0,0);holeX.restore();
+    const d=holeX.getImageData(0,0,24,24).data;let n=0;for(let i=3;i<d.length;i+=4)if(d[i]>60)n++;
+    best=Math.max(best,n/(PI*144));}
+  return best;
 }
 // fraction of mark footprint already inked (for bouquet detection)
 const probeC=mkC(24,24),probeX=probeC.getContext('2d',{willReadFrequently:true});
@@ -625,8 +639,9 @@ void main(){
   vec3 base=uCol;
   if(uTexOn>0.5){vec3 t=texture2D(uTex,vU*uUvS).rgb;base*=t*t;}
   float spec=uMat.x,shin=uMat.y,metal=uMat.z;
+  vec3 inkMul=vec3(1.0);
   if(uInkMode>0.5&&uInkMode<1.5){vec4 ik=texture2D(uInk,vU);vec3 ic=ik.rgb*ik.rgb;
-    float a=clamp(ik.a*uInkAmt*1.3,0.0,1.0);base*=mix(vec3(1.0),ic*1.04,a);
+    float a=clamp(ik.a*uInkAmt*1.25,0.0,1.0);inkMul=mix(vec3(1.0),ic*1.02,a);base*=mix(vec3(1.0),inkMul,0.35);
     float gold=clamp((ik.g-ik.b)*3.0-0.6,0.0,1.0)*a;spec+=gold*0.55;metal=max(metal,gold*0.55);}
   else if(uInkMode>1.5){float m=texture2D(uInk,vU).a;vec3 ic=mix(uInkA,uInkB,smoothstep(0.42,0.58,vU.x));base=mix(base,ic,m*uInkAmt);spec+=m*uInkAmt*0.04;}
   vec3 N=normalize(vN);if(!gl_FrontFacing)N=-N;
@@ -642,6 +657,7 @@ void main(){
   float a=uAlpha;if(uFres>0.0){float f=1.0-max(dot(N,V),0.0);a=mix(uAlpha,1.0,f*f*uFres);}
   col=(col*(2.51*col+0.03))/(col*(2.43*col+0.59)+0.14);
   col=pow(clamp(col,0.0,1.0),vec3(0.4545));
+  col*=pow(inkMul,vec3(0.4545*0.92));
   vec2 sc=gl_FragCoord.xy/uRes-0.5;col*=1.0-0.36*smoothstep(0.35,0.95,length(sc*vec2(uRes.x/uRes.y,1.0))*0.92);
   gl_FragColor=vec4(col*a,a);}`;
 const VS_DEP=`attribute vec3 aP;attribute vec2 aU;uniform mat4 uM;uniform mat4 uLVP;varying vec2 vU;
@@ -811,7 +827,7 @@ function partsUpdate(dt){for(let i=parts.length-1;i>=0;i--){const q=parts[i];q.l
 //  stations / kinematics
 // =====================================================================
 function stationOpen(s){
-  if(st.sendAside)return false;
+  if(st.sendAside||st.peek)return false;
   if(s==='P')return !(st.beta>=6&&st.beta<=55);
   return st.unlocked&&st.cover<0.5&&!(st.beta>125&&st.beta<172);
 }
@@ -879,12 +895,13 @@ function armsUpdate(dth){
       const a=(st.th+s.off)*DEG;inkSplash(L.D[0]+Math.cos(a)*L.padR,L.padTop+0.05,L.D[1]+Math.sin(a)*L.padR,INK[s.type].a,2);}
     if(k.dip<0.2)s.padIn=false;
     s.pen=k.pen;s.penQ=k.penQ;
+    if(Math.abs(rel)>9)s.armP=true;if(Math.abs(rel-44)>9)s.armQ=true;
     if(k.pen>0.0004){
-      if(!s.inP){s.inP=true;s.phiRef=st.phi;s.printed=false;s.band=0;}
+      if(!s.inP){s.inP=true;s.phiRef=st.phi;if(s.armP!==false){s.printed=false;s.armP=false;}s.band=0;}
       if(!s.printed&&k.pen>0.055){doPrint(s,k.pen);s.printed=true;}
     }else if(s.inP){s.inP=false;contactEnd(s,'P');}
     if(k.penQ>0.0004){
-      if(!s.inQ){s.inQ=true;s.phiRef=st.phi;s.printedQ=false;s.band=0;}
+      if(!s.inQ){s.inQ=true;s.phiRef=st.phi;if(s.armQ!==false){s.printedQ=false;s.armQ=false;}s.band=0;}
       if(!s.printedQ&&k.penQ>0.055){doPrint(s,k.penQ,'Q');s.printedQ=true;}
     }else if(s.inQ){s.inQ=false;contactEnd(s,'Q');}
     // ratchet feed (only forward motion, flap down)
@@ -895,9 +912,10 @@ function armsUpdate(dth){
   const tr=st.tr;
   if(tr.emerged){
     const rel=wrap(st.th+L.trOff-L.aP),k=trKin(rel);
-    if(k.penP>0.0004){if(!tr.inP){tr.inP=true;tr.picked=false;tr.dragAcc=0;}if(!tr.picked&&k.penP>0.05){doPick(1);tr.picked=true;}}
+    if(Math.abs(rel)>9)tr.armP=true;if(Math.abs(rel-44)>9)tr.armQ=true;
+    if(k.penP>0.0004){if(!tr.inP){tr.inP=true;if(tr.armP!==false){tr.picked=false;tr.armP=false;}tr.dragAcc=0;}if(!tr.picked&&k.penP>0.05){doPick(1);tr.picked=true;}}
     else if(tr.inP){tr.inP=false;}
-    if(k.penQ>0.0004){if(!tr.inQ){tr.inQ=true;tr.dep=false;tr.dragAcc=0;}if(!tr.dep&&k.penQ>0.05){doDeposit(1);tr.dep=true;}}
+    if(k.penQ>0.0004){if(!tr.inQ){tr.inQ=true;if(tr.armQ!==false){tr.dep=false;tr.armQ=false;}tr.dragAcc=0;}if(!tr.dep&&k.penQ>0.05){doDeposit(1);tr.dep=true;}}
     else if(tr.inQ){tr.inQ=false;}
     tr.relPrev=rel;
   }
@@ -915,8 +933,8 @@ function doPrint(s,pen,station){
   SND.peta(pn);inkSplash(C[0],surfY(station),C[1],col.a,4);
   st.f.first=true;logEv('print'+s.k+station+(stack.top?'T':'U')+' cov'+cov.toFixed(2));
   // success kinds
-  if(res.hole){let best=9;for(const h of L.holes){const w=topWorld(h.u,h.v,stack.mode,st.phi);best=Math.min(best,Math.hypot(w[0]-C[0],w[1]-C[1])-h.r);}
-    if(best<0.45){st.f.d4=true;SND.hole();const w=nearestHole(stack.mode,C);sparkle(w[0],L.pageY+0.2,w[1],7,0.35,[1,0.95,0.75]);logEv('hole');}}
+  if(res.hole){
+    {st.f.d4=true;SND.hole();const w=nearestHole(stack.mode,C);sparkle(w[0],L.pageY+0.2,w[1],7,0.35,[1,0.95,0.75]);logEv('hole');}}
   if(cov>0.04&&st.f.turnSincePrint>4){st.f.d1=true;setTimeout(()=>SND.bouquet(),60);sparkle(C[0],surfY(station)+0.3,C[1],8,0.7);logEv('bouquet');}
   st.f.turnSincePrint=0;
   if(s.k===3&&!st.unlocked)unlock();
@@ -960,7 +978,7 @@ function paperRotate(d,src){
 function doPick(strength){
   const stack=stackAt('P');if(!stack)return;
   const got=pickStack(stack,L.P,L.aP,st.phi,strength);
-  if(strength>=1){if(got>0.004){SND.pick();st.tr.glow=1;logEv('pick'+got.toFixed(3));}else SND.mugyu(0.2);}
+  if(strength>=1){logEv('pick'+got.toFixed(3));if(got>0.004){SND.pick();st.tr.glow=1;}else SND.mugyu(0.2);}
 }
 function doDeposit(strength){
   const stack=stackAt('Q');if(!stack)return;
@@ -976,14 +994,14 @@ function doDeposit(strength){
 //  big events
 // =====================================================================
 function unlock(){
-  st.unlocked=true;st.busy=3.9;SND.unlock();logEv('unlock');
+  st.unlocked=true;st.busy=3.9;st.peek=true;SND.unlock();logEv('unlock');
   sparkle(L.P[0],1.2,L.P[1],10,1.2);
   tlAdd(0.25,0.9,(u)=>{st.coverA=180*easeIO(u);},()=>{st.cover=0;});
   tlAdd(0.3,0.01,null,()=>SND.whoosh());
   tlAdd(0.5,0.7,(u)=>{st.knobUp=easeOut(u);},()=>SND.kotsun(1.2));
   tlAdd(0.8,1.1,(u)=>{st.beta=138*easeOut(u);},()=>{SND.stand();sparkle(L.S[0],1.2,-2.4,8,1.4,[1,0.95,0.8]);});
   tlAdd(1.1,0.9,(u)=>{st.tr.emerged=true;st.tr.ext=easeOut(u);},()=>{st.tr.ext=1;SND.kotsun(1.0);});
-  tlAdd(2.9,1.0,(u)=>{st.beta=138*(1-easeIO(u));},()=>{st.beta=0;SND.kotsun(0.85);});
+  tlAdd(2.9,1.0,(u)=>{st.beta=138*(1-easeIO(u));},()=>{st.beta=0;st.peek=false;SND.kotsun(0.85);});
 }
 function captureMemorial(){
   const N=256,mk=(src)=>{const c=mkC(N,N),x=c.getContext('2d');
@@ -1314,7 +1332,7 @@ function drawScene(){
     drawSpring(root,[p.x,p.y+0.74,p.z],0.4,0.06,MT.brass,6);
     const hH=0.5,Mh=chain(M4.T(p.x,p.y,p.z),M4.RY(-(p.yaw+90)*DEG),M4.T(0,hH/2,0),M4.RZ(p.tilt*DEG),M4.T(0,-hH/2,0));
     draw(MS.trPlate,Mh,MT.wood);draw(MS.trKnob,Mh,MT.brass);
-    draw(MS.trFace,Mh,Object.assign({},MT.trFace,{emis:st.tr.glow*0.25,emisC:[1,0.95,0.85]}));
+    draw(MS.trFace,Mh,Object.assign({},MT.trFace,{emis:st.tr.glow*0.15+0.3*clamp(p.tilt/72,0,1),emisC:[0.95,0.92,0.86]}));
     draw(MS.trBody,Mh,MT.silicone);
   }
   // ---- side row: sample + memorials ----
@@ -1492,7 +1510,7 @@ function guideTarget(){
   if(st.busy>0||st.fly||st.sendAside)return null;
   const f=st.f,c=st.cyc;
   if(!f.first)return {t:'ring',k:'r0'};
-  const held=st.seats.some(s=>s.emerged&&(s.inP&&st.beta<6||s.inQ&&st.beta>=172))&&G.kind!=='ring';
+  const held=st.seats.some(s=>s.emerged&&s.band<=0.45&&(s.inP&&st.beta<6||s.inQ&&st.beta>=172))&&G.kind!=='ring';
   if(held&&!f.d2)return {t:'paper',k:'pb'};
   if(st.prints>=3&&f.userTurn<20)return {t:'paper',k:'p0'};
   if(!st.unlocked)return {t:'ring',k:'r1'};
@@ -1546,7 +1564,7 @@ function overlayUpdate(){
 //  main update
 // =====================================================================
 let prevBeta=0;
-function moveRing(d){if(!d)return;const n=Math.max(1,Math.ceil(Math.abs(d)/2.0));for(let i=0;i<n;i++){st.th+=d/n;armsUpdate(d/n);}}
+function moveRing(d){if(!d)return;st._rt=(st._rt||0)+d;if(Math.abs(st._rt)>=30){st._rt=0;SND.click(620,0.035);}const n=Math.max(1,Math.ceil(Math.abs(d)/2.0));for(let i=0;i<n;i++){st.th+=d/n;armsUpdate(d/n);}}
 function update(dt){
   st.t+=dt;tlUpdate();
   if(st.busy>0)st.busy=Math.max(0,st.busy-dt);
@@ -1568,10 +1586,10 @@ function update(dt){
   if(st.pendPaper){dPhi+=st.pendPaper;st.pendPaper=0;}
   if(st.pnudge){const s=st.pnudge*Math.min(1,dt*12);dPhi+=s;st.pnudge-=s;if(Math.abs(st.pnudge)<0.05){dPhi+=st.pnudge;st.pnudge=0;}}
   if(G.kind!=='paper'&&Math.abs(st.phiV)>3){dPhi+=st.phiV*dt;st.phiV*=Math.exp(-dt*4.5);}else if(G.kind!=='paper')st.phiV=0;
-  if(dPhi)paperRotate(dPhi,'user');
+  if(dPhi){paperRotate(dPhi,'user');st._pt=(st._pt||0)+dPhi;if(Math.abs(st._pt)>=20){st._pt=0;SND.click(940,0.03);}}
   // ---- sketchbook flap ----
   if(st.busy<=0){
-    if(st.pendBook){st.beta=clamp(st.beta+st.pendBook*0.55,0,180);st.pendBook=0;}
+    if(st.pendBook){const b0=st.beta;st.beta=clamp(st.beta+st.pendBook*0.55,0,180);st.pendBook=0;if(Math.floor(b0/12)!==Math.floor(st.beta/12))SND.click(480,0.035);}
     if(st.bnudge){const s=st.bnudge*Math.min(1,dt*10);st.beta=clamp(st.beta+s,0,180);st.bnudge-=s;if(Math.abs(st.bnudge)<0.1){st.bnudge=0;settleBook();}}
     if(G.kind!=='book'&&st.bSettle!==null&&!st.bnudge){st.beta=lerp(st.beta,st.bSettle,Math.min(1,dt*7));if(Math.abs(st.beta-st.bSettle)<0.05){st.beta=st.bSettle;if(st.bSettle===80)SND.kotsun(1.05);st.bSettle=null;}}
   }else{st.pendBook=0;}
@@ -1583,7 +1601,7 @@ function update(dt){
   // completion: both faces printed and the page stands up
   if(st.unlocked&&st.cyc.back&&!st.cyc.done&&st.busy<=0&&!st.sendAside&&G.kind!=='book'&&st.beta>=58&&st.beta<=125&&st.bSettle===null)complete();
   // ---- springs ----
-  for(const s of st.seats){if(!s.inP){s.twV+=(-480*s.tw-15*s.twV)*dt;s.tw+=s.twV*dt;if(Math.abs(s.tw)<0.01&&Math.abs(s.twV)<0.05){s.tw=0;s.twV=0;}}}
+  for(const s of st.seats){if(!s.inP&&!s.inQ){s.twV+=(-480*s.tw-15*s.twV)*dt;s.tw+=s.twV*dt;if(Math.abs(s.tw)<0.01&&Math.abs(s.twV)<0.05){s.tw=0;s.twV=0;}}}
   st.tr.glow=Math.max(0,st.tr.glow-dt*0.6);st.call=Math.max(0,st.call-dt*2.2);
   for(const k in st.jig){st.jig[k]*=Math.exp(-dt*5);if(st.jig[k]<0.01)delete st.jig[k];}
   SND.slide(st.bandSnd);st.bandSnd=Math.max(0,st.bandSnd-dt*8);
