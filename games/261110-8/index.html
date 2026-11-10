@@ -439,22 +439,24 @@ const WL={
   inner:{x0:-0.70,x1:0.70,z0:-0.68,z1:0.43},
   outerX:0.79,backZ:-0.77,frontZ:0.50,
   wallTop:0.505,doorZ:0.462,doorBot:0.245,doorTop:0.50,
-  grid:{x0:-0.88,z0:-0.74,x1:0.92,z1:1.66,cell:0.016}
+  grid:{x0:-0.88,z0:-0.74,x1:0.92,z1:2.2,cell:0.016}
 };
 const LAY={portrait:true,plate:{x:0.16,z:1.10,r:0.46},dog:{x:-0.56,z:1.20,yaw:0.95},elev:1.02,mouth:[0,0,0],dogZone:{x:-0.4,z:1.2,r:0.18}};
-function computeLayout(asp){
+function computeLayout(asp,aspS){
   const old={x:LAY.plate.x,z:LAY.plate.z,r:LAY.plate.r};
+  aspS=aspS||asp;
   if(asp<1.0){
     LAY.portrait=true;
     const tall=clamp((0.75-asp)/0.3,0,1); // 1 for very tall phones
-    LAY.plate={x:0.13,z:1.08+0.04*tall,r:0.45};
-    LAY.dog={x:-0.44,z:1.50+0.10*tall,yaw:0.45};
-    LAY.elev=1.1+0.06*tall;
+    const t2=clamp((0.60-aspS)/0.1,0,1);   // very tall safe area: dog below the plate
+    LAY.plate={x:lerp(0.13,0.10,t2),z:lerp(1.08+0.04*tall,1.12,t2),r:lerp(0.45,0.47,t2)};
+    LAY.dog={x:lerp(-0.44,-0.22,t2),z:lerp(1.50+0.10*tall,1.95,t2),yaw:lerp(0.45,0.35,t2)};
+    LAY.elev=lerp(1.1+0.06*tall,1.25,t2);
   }else{
     LAY.portrait=false;
-    LAY.plate={x:-0.06,z:1.02,r:0.47};
-    LAY.dog={x:0.98,z:0.98,yaw:-0.40};
-    LAY.elev=0.9;
+    LAY.plate={x:-0.06,z:0.94,r:0.42};
+    LAY.dog={x:0.92,z:0.92,yaw:-0.40};
+    LAY.elev=0.85;
   }
   return {dx:LAY.plate.x-old.x,dz:LAY.plate.z-old.z,sr:LAY.plate.r/old.r};
 }
@@ -502,7 +504,7 @@ function fitPoints(){
   const pts=[];const I=WL.inner;
   const xw=LAY.portrait?0.665:0.80;
   for(const x of [-xw,xw]){pts.push([x,0.5,I.z0],[x,0.5,0.46],[x,0.03,0.5]);}
-  pts.push([0.58,0.09,0.53]);
+  pts.push([0.58,0.09,0.53]);if(LAY.portrait)pts.push([0.70,0.22,-0.13]);
   const P=LAY.plate;for(let k=0;k<12;k++){const a=k/12*TAU;pts.push([P.x+Math.cos(a)*P.r*1.03,0.02,P.z+Math.sin(a)*P.r*1.03]);}
   const d=LAY.dog;const c=Math.cos(d.yaw),s=Math.sin(d.yaw);
   for(const lx of [-0.17,0.17])for(const lz of [-0.24,0.27])for(const ly of [0.0,0.54]){pts.push([d.x+lx*c+lz*s,ly,d.z-lx*s+lz*c]);}
@@ -1106,6 +1108,7 @@ function ovenDragUpdate(dt){
     let bakedOther=0;for(let i=0;i<P.n;i++)if(P.alive[i]&&!P.soft[i]&&P.bake[i]>0.9)bakedOther++;
     if(bakedOther>P.cnt*0.4)achieve('d2','rewind edited band');
   }
+  if(DRAG.press>0.05)for(const i of DRAG.list){const w=P.w[i];if(w>0)P.glow[i]=Math.max(P.glow[i],0.7*w*DRAG.press);}
   narrowBand();
   // fulcrum tilt
   const f=hardEarNear(P.x[DRAG.anchor]||DRAG.G0[0],P.z[DRAG.anchor]||DRAG.G0[1],0.30);
@@ -2031,7 +2034,7 @@ const MASK={w:40,h:30,x0:-0.64,z0:-0.62,cs:0.032};
 
 function defaultShape(){
   const cx=0.0,cz=-0.13,R=0.385;
-  const ax=0.32,az=-0.115,bx=0.648,bz=-0.098,rr=0.074;
+  const ax=0.32,az=-0.115,bx=0.59,bz=-0.1,rr=0.074;
   return (x,z)=>{if(Math.hypot(x-cx,z-cz)<=R)return true;
     const vx=bx-ax,vz=bz-az;const t=clamp(((x-ax)*vx+(z-az)*vz)/(vx*vx+vz*vz),0,1);const d=Math.hypot(x-ax-vx*t,z-az-vz*t);
     return d<=rr*(1-0.25*t);};
@@ -2135,6 +2138,7 @@ function serveUpdate(dt){
   OVEN.door=sstep(0.2,0.8,t);
   OVEN.warm=sstep(0.3,1.7,t);
   OVEN.tray=sstep(0.55,1.25,t)*(1-sstep(2.0,2.6,t));
+  if(t>2.0)OVEN.door=1-sstep(2.0,2.6,t);
   const u=sstep(0.75,1.85,t);const fw=sstep(0.55,1.25,t)*0.18*(1-u);
   for(let i=0;i<P.n;i++){if(!P.alive[i])continue;
     const tx=M.tx+(P.ex[i]-M.cx)*M.s,tz=M.tz+(P.ez[i]-M.cz)*M.s;
@@ -2169,7 +2173,7 @@ function arriveUpdate(dt){
     P.x[i]=A.cx+(P.gx[i]-A.cx)*spread;P.z[i]=A.cz+(P.gz[i]-A.cz)*spread;P.px[i]=P.x[i];P.pz[i]=P.z[i];
     P.lift[i]=t<0.5?(1-pop)*0.05:0;P.liftV[i]=0;}
   if(t>0.5&&!A.s1){A.s1=1;emit('arriveLand',{x:A.cx,z:A.cz});}
-  OVEN.door=1-sstep(1.1,1.7,t);
+  OVEN.door=sstep(0.0,0.35,t)*(1-sstep(1.1,1.7,t));
   OVEN.warm=1-sstep(1.2,2.3,t);
   if(t>1.35&&!A.ch){A.ch=1;CH.n=G.arrCheese;emit('cheesePop',{x:A.cx,z:A.cz});}
   if(t>1.6&&!A.bk){A.bk=1;
@@ -2352,6 +2356,7 @@ function beginAt(cx,cy,demo){
     const a=DRAG.anchor;DRAG.snapOff=[DRAG.mode==='oven'?w[0]-P.x[a]:0,DRAG.mode==='oven'?w[1]-P.z[a]:0];
     if(DRAG.mode==='oven'){DRAG.snapOff[0]*=-1;DRAG.snapOff[1]*=-1;}
     DENT.x=P.x[a];DENT.z=P.z[a];DENT.amt=1;
+    if(DRAG.mode==='oven'){for(const i of DRAG.list){const w=P.w[i];P.liftV[i]+=0.55*w;P.glow[i]=Math.max(P.glow[i],1.2*w);}}
     GF.forceUpdate=true;
   }else if(!demo){touchOther(cx,cy,w);}
   return ok;
@@ -2697,7 +2702,7 @@ function resize(){
   CAM.cssW=cw;CAM.cssH=ch;CAM.dpr=dpr;
   const nw=Math.max(1,Math.round(cw*dpr)),nh=Math.max(1,Math.round(ch*dpr));
   if(canvas.width!==nw||canvas.height!==nh){canvas.width=nw;canvas.height=nh;}
-  const asp=cw/ch;const wasPortrait=LAY.portrait;const d=computeLayout(asp);
+  const asp=cw/ch;const wasPortrait=LAY.portrait;const d=computeLayout(asp,(cw-SAFE.l-SAFE.r)/Math.max(1,ch-SAFE.t-SAFE.b));
   if(Math.abs(d.dx)+Math.abs(d.dz)>1e-6||Math.abs(d.sr-1)>1e-6||wasPortrait!==LAY.portrait||!GF.sup){
     if(gl&&MESH.table)buildPlate();
     if(GF.sup)computeSupportGrid();
@@ -2706,7 +2711,7 @@ function resize(){
       for(let k=0;k<CH.n;k++){CH.x[k]=pl.x+(CH.x[k]-(pl.x-d.dx))*d.sr;CH.z[k]=pl.z+(CH.z[k]-(pl.z-d.dz))*d.sr;}}
     else if(G.phase==='serve'&&G.serveMap){G.serveMap.tx=LAY.plate.x;G.serveMap.tz=LAY.plate.z;G.serveMap.s*=d.sr;}
   }
-  const dg=LAY.dog;LAY.dogZone={x:dg.x+Math.sin(dg.yaw)*0.22,z:dg.z+Math.cos(dg.yaw)*0.22-0.02,r:0.17};
+  const dg=LAY.dog;{const pl=LAY.plate;let vx=pl.x-dg.x,vz=pl.z-dg.z;const l=Math.hypot(vx,vz)||1;LAY.dogZone={x:dg.x+vx/l*0.22,z:dg.z+vz/l*0.22,r:0.17};}
   DOG.x=dg.x;DOG.z=dg.z;DOG.yaw=dg.yaw;
   fitCamera();
   bgDirty=true;
