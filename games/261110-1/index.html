@@ -219,12 +219,16 @@ float shadowAt(vec3 wp, vec3 n){
   vec4 lp = uLightVP * vec4(wp + n*0.14, 1.0);
   vec3 p = lp.xyz/lp.w*0.5+0.5;
   if(p.x<0.0||p.x>1.0||p.y<0.0||p.y>1.0||p.z>1.0) return 1.0;
-  float b = 0.0035; float s = 0.0; float t = uShadowTexel*1.25;
-  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( t, t*0.4))));
-  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-t*0.4, t))));
-  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( t*0.4,-t))));
-  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-t,-t*0.4))));
-  return s*0.25;
+  float b = 0.0035; float s = 0.0; float t = uShadowTexel*2.6;
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-0.94, -0.40)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( 0.95, -0.77)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-0.09, -0.93)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( 0.34,  0.29)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-0.82,  0.54)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( 0.79,  0.61)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2(-0.20,  0.97)*t)));
+  s += step(p.z-b, unpackDepth(texture2D(uShadow, p.xy+vec2( 0.05, -0.15)*t)));
+  return 0.45 + 0.55 * s * 0.125;
 }
 vec3 envAt(vec3 r){
   float c = cos(uEnvYaw), s = sin(uEnvYaw);
@@ -297,9 +301,13 @@ void main(){
   vec3 alb = uColor; float rough = uRough, spec = uSpec, metal = uMetal, wrap = 0.0, ao = 1.0, alpha = uAlpha;
   float m = uMat;
   if (m > 0.5 && m < 1.5) { // brushed steel
-    float st = vn(vec2(vW.x*0.35, vW.z*26.0))*0.6 + vn(vec2(vW.x*1.7, vW.z*90.0))*0.4;
-    alb *= 0.86 + 0.22*st; rough = clamp(uRough + (st-0.5)*0.18, 0.12, 0.9);
-    N = bumpN(N, vW, st, 0.012);
+    float hi = vn(vec2(vW.x*1.7, vW.z*30.0));
+#ifdef HAS_DERIV
+    hi = mix(hi, 0.5, smoothstep(0.4, 1.2, fwidth(vW.z*30.0)));
+#endif
+    float st = vn(vec2(vW.x*0.35, vW.z*12.0))*0.6 + hi*0.4;
+    alb *= 0.88 + 0.2*st; rough = clamp(uRough + (st-0.5)*0.16, 0.12, 0.9);
+    N = bumpN(N, vW, st, 0.006);
   } else if (m > 1.5 && m < 2.5) { // white enamel
     float op = vn(vW.xz*3.1)*0.6 + vn(vW.xz*9.0)*0.4;
     N = bumpN(N, vW, op, 0.02);
@@ -317,7 +325,7 @@ void main(){
     alb *= 0.95 + 0.08*hh; alb = mix(alb, alb*0.88, pore*0.25);
     float r = vUV.y; // radial 0..1
     float bake = smoothstep(0.72, 1.0, r);
-    alb = mix(alb, alb*vec3(1.02,0.92,0.80), bake*0.35);
+    alb = mix(alb, alb*vec3(1.03,0.9,0.76), bake*0.5);
     wrap = 0.25;
   } else if (m > 4.5 && m < 5.5) { // shell inner flat face
     float d = texture2D(uDetB, vL.xz*0.8).r;
@@ -330,8 +338,8 @@ void main(){
     float r = vUV.y; alb = mix(alb, alb*vec3(1.0,0.9,0.78), smoothstep(0.8,1.0,r)*0.3);
     rough = 0.9; wrap = 0.2;
   } else if (m > 5.5 && m < 6.5) { // shell foot (pied)
-    float d = texture2D(uDetC, vec2(vUV.x*9.0, vUV.y)).r;
-    float d2 = texture2D(uDetB, vec2(vUV.x*14.0, vUV.y*0.5)).r;
+    float d = texture2D(uDetC, vec2(vUV.x*5.0, vUV.y)).r;
+    float d2 = texture2D(uDetB, vec2(vUV.x*8.0, vUV.y*0.5)).r;
     float hh = d*0.65 + d2*0.35;
     N = bumpN(N, vW, hh, 0.35);
     alb = mix(alb*vec3(1.04,0.95,0.84), alb, 0.55) * (0.70 + 0.42*hh);
@@ -372,17 +380,21 @@ void main(){
     float d = texture2D(uDetA, vL.xz*0.9).r;
     N = bumpN(N, vW, d, 0.05); rough = 0.42; spec = 0.035; wrap = 0.55;
   } else if (m > 14.5 && m < 15.5) { // platter: circular brushed stainless
-    float rr = length(vL.xz); float st = vn(vec2(rr*60.0, atan(vL.z, vL.x)*1.5))*0.6 + vn(vec2(rr*7.0, atan(vL.z, vL.x)*3.0))*0.4;
+    float rr = length(vL.xz); float fine = vn(vec2(rr*35.0, atan(vL.z, vL.x)*1.5));
+#ifdef HAS_DERIV
+    fine = mix(fine, 0.5, smoothstep(0.5, 1.5, fwidth(rr*35.0)));
+#endif
+    float st = fine*0.6 + vn(vec2(rr*7.0, atan(vL.z, vL.x)*3.0))*0.4;
     alb *= 0.88 + 0.2*st; rough = clamp(uRough + (st-0.5)*0.15, 0.12, 0.8);
     N = bumpN(N, vW, st, 0.01);
-  } else if (m > 13.5 && m < 14.5) { // jam solid
-    rough = 0.08; spec = 0.05; wrap = 0.3;
+  } else if (m > 13.5 && m < 14.5) { // jam solid (glossy gel)
+    rough = 0.06; spec = 0.05; wrap = 0.45;
   }
   float sh = shadowAt(vW, N);
   vec3 col = litC(alb, N, V, vW, rough, spec, metal, wrap, ao, sh);
   if (uGlow > 0.0) {
-    if (uColor.r < 0.08) { col += vec3(1.0, 0.55, 0.22) * uGlow * (0.55 + 0.45*vn(vL.xy*3.0)); }
-    else { float f = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.0); col += vec3(1.0, 0.97, 0.86) * uGlow * (0.25 + 1.4*f); }
+    if (uColor.r < 0.08) { col += vec3(1.0, 0.55, 0.22) * uGlow * mix(0.35, 1.0, smoothstep(1.2, -1.0, vL.y)) * (1.0 - 0.5*smoothstep(0.75, 1.0, abs(vL.x)/2.8)); }
+    else { float f = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.0); col += vec3(0.62, 0.82, 1.0) * uGlow * (0.18 + 1.6*f); }
   }
   vec3 outc = tonemap(col);
   outc = mix(outc, vec3(0.86, 0.89, 0.92), uHaze); // depth haze: far objects sit softly behind the sharp foreground
@@ -403,31 +415,33 @@ void main(){
   vec3 V = normalize(uEye - vW);
   float c = vM0.x, j = vM0.y, crust = vM0.z, s = vM0.w, A = vM1.x;
   vec3 creamC = vec3(0.90, 0.80, 0.60);
-  vec3 baseC = uBaseKind < 0.5 ? vec3(0.86,0.88,0.90) : (uBaseKind < 1.5 ? vec3(0.42,0.53,0.18) : (uBaseKind < 2.5 ? vec3(0.50,0.53,0.56) : vec3(0.84,0.50,0.49)));
+  vec3 baseC = uBaseKind < 0.5 ? vec3(0.87,0.90,0.92) : (uBaseKind < 1.5 ? vec3(0.42,0.53,0.18) : (uBaseKind < 2.5 ? vec3(0.50,0.53,0.56) : vec3(0.84,0.50,0.49)));
   // cream ridges (piped star-tip streaks)
   float ph = s * 6.2832 / uRidgeL;
   float rid = cos(ph) * A * smoothstep(0.02, 0.18, c);
 #ifdef HAS_DERIV
-  rid *= 1.0 - smoothstep(0.9, 2.2, fwidth(ph));
+  rid *= 1.0 - smoothstep(1.4, 2.8, fwidth(ph));
 #endif
   float det = texture2D(uDetA, vL.xz*0.8).r - 0.5;
-  float hgt = rid*0.045 + det*0.012*smoothstep(0.0,0.1,c);
+  float hgt = rid*0.07 + det*0.012*smoothstep(0.0,0.1,c);
+  float groove = smoothstep(0.55, 1.0, -cos(ph)) * A * smoothstep(0.02, 0.18, c);
   vec3 Nb = bumpN(N, vW, hgt, 1.0);
   float cm = smoothstep(0.0, 0.05, c);
-  vec3 under = mix(baseC, creamC, cm);
+  vec3 under = mix(baseC, creamC * (1.0 - 0.1*groove), cm);
   // crust speckle (crumbs pressed into cream)
   float sp = vn(vL.xz*14.0); float sp2 = vn(vL.xz*31.0 + 3.1);
   vec3 crumbC = sp2 < 0.45 ? vec3(0.64,0.71,0.42) : (sp2 < 0.7 ? vec3(0.90,0.68,0.66) : vec3(0.85,0.74,0.56));
   float spk = crust * smoothstep(0.55, 0.75, sp);
   under = mix(under, crumbC*0.95, spk*0.85);
   Nb = bumpN(Nb, vW, spk*0.5, 0.03);
-  // jam on top: glossy translucent gel, colour by thickness
+  // jam on top: glossy translucent strawberry gel, colour by thickness (never blood-dark)
   float jt = smoothstep(0.004, 0.03, j);
-  vec3 jamC = mix(vec3(0.62, 0.05, 0.07), vec3(0.28, 0.008, 0.02), smoothstep(0.03, 0.26, j));
-  float seeds = smoothstep(0.93, 0.97, vn(vL.xz*16.0)) * smoothstep(0.06, 0.12, j);
+  vec3 jamC = mix(vec3(0.82, 0.12, 0.15), vec3(0.58, 0.035, 0.07), smoothstep(0.03, 0.26, j));
+  vec2 sc = vL.xz * 9.0; vec2 ci = floor(sc); vec2 cf = fract(sc) - 0.5 - (vec2(h21(ci), h21(ci + 17.3)) - 0.5) * 0.6;
+  float seeds = (1.0 - smoothstep(0.05, 0.09, length(cf))) * step(0.55, h21(ci + 3.7)) * smoothstep(0.05, 0.1, j);
   float bits = smoothstep(0.66, 0.78, vn(vL.xz*3.2 + 11.0)) * smoothstep(0.05, 0.1, j);
-  jamC = mix(jamC, vec3(0.62, 0.36, 0.10), seeds*0.4);
-  jamC = mix(jamC, vec3(0.72, 0.08, 0.10), bits*0.55);
+  jamC = mix(jamC, vec3(0.95, 0.70, 0.30), seeds*0.7);
+  jamC = mix(jamC, vec3(0.90, 0.22, 0.24), bits*0.45);
   vec3 alb = mix(under, jamC, jt);
   float jamTop = jt;
   vec3 Nf = normalize(mix(Nb, N, jamTop*0.9));
@@ -439,7 +453,9 @@ void main(){
   vec3 col = litC(alb, Nf, V, vW, rough, spec, 0.0, wrap, ao, sh);
   // subsurface-ish lift for cream in shadow, light passing through thin jam
   col += creamC * 0.06 * cm * (1.0 - jamTop);
-  col += vec3(0.45, 0.02, 0.03) * jamTop * (1.0 - smoothstep(0.03, 0.2, j)) * 0.22;
+  col += vec3(0.95, 0.28, 0.22) * jamTop * 0.2 * (1.0 - smoothstep(0.05, 0.3, j));
+  float fj = pow(1.0 - clamp(dot(Nf, V), 0.0, 1.0), 3.0);
+  col += envAt(reflect(-V, Nf)) * (0.05 + 0.6*fj) * jamTop;
   gl_FragColor = vec4(tonemap(col), 1.0);
 }`;
 
@@ -689,12 +705,12 @@ function shellMeshes(seed, chip) {
   };
   const footY0 = th => chipK(th, chip) * 0.30;
   const domeY = (r, th) => { const x = clamp(r / rb, 0, 1); return fH + dH * Math.pow(Math.max(0, 1 - Math.pow(x, 2.3)), 0.6) + (fbm(Math.cos(th) * r * 0.8 + seed, Math.sin(th) * r * 0.8, 2) - 0.5) * 0.04; };
-  const domeEdge = th => rb - chipK(th, chip) * 0.5;
+  const domeEdge = th => { const k = chipK(th, chip); return rb - k * (0.42 + 0.22 * (hash2(Math.floor(th * 60), 7) - 0.5)); };
   // dome
   const md = new MB();
   paramSurface(md, 96, 22, (u, v) => {
     const th = u * TAU; const re = domeEdge(th); const r = re * (1 - v);
-    let y = domeY(r * rb / re, th); if (v < 0.02) y = fH - chipK(th, chip) * 0.08;
+    let y = domeY(r, th); if (v < 0.02) y = fH - chipK(th, chip) * 0.08;
     return [Math.cos(th) * r, y, Math.sin(th) * r];
   }, (u, v) => [u, 1 - v], true, false);
   // foot band
@@ -794,6 +810,33 @@ function capsuleInto(mb, a, b, ra, rb, seg, uvy, star) {
     const a0 = base + k * (seg + 1) + s, b0 = a0 + seg + 1;
     mb.quad(a0, a0 + 1, b0 + 1, b0);
   }
+}
+
+// continuous tube through points with parallel-transport frames (no per-segment joints);
+// radii per point; star = ridge depth (cream piped look), twist = ridge rotation per point; capped ends
+function tubeAlong(mb, pts, radii, seg, star, twist) {
+  const n = pts.length; if (n < 2) return;
+  const T = [];
+  for (let k = 0; k < n; k++) T.push(V3.norm(V3.sub(pts[Math.min(n - 1, k + 1)], pts[Math.max(0, k - 1)])));
+  let N = V3.cross(T[0], [0, 1, 0]); if (V3.len(N) < 1e-3) N = V3.cross(T[0], [1, 0, 0]); N = V3.norm(N);
+  const frames = [];
+  for (let k = 0; k < n; k++) { if (k > 0) { N = V3.sub(N, V3.mul(T[k], V3.dot(N, T[k]))); if (V3.len(N) < 1e-4) N = frames[k - 1][0]; N = V3.norm(N); } frames.push([N, V3.cross(T[k], N)]); }
+  const ring = (c, Nn, Bn, r, tw, tg) => { const base = mb.n;
+    for (let s = 0; s <= seg; s++) {
+      const a = s / seg * TAU; const ca = Math.cos(a), sa = Math.sin(a);
+      const rad = V3.add(V3.mul(Nn, ca), V3.mul(Bn, sa));
+      const sr = star ? 1 + star * Math.cos(a * 8 + tw) : 1;
+      let nr = rad;
+      if (star) { const tgn = V3.add(V3.mul(Nn, -sa), V3.mul(Bn, ca)); nr = V3.norm(V3.add(rad, V3.mul(tgn, 8 * star * Math.sin(a * 8 + tw) / sr))); }
+      if (tg) nr = V3.norm(V3.add(V3.mul(nr, 0.6), V3.mul(tg, 0.8)));
+      mb.vert(V3.add(c, V3.mul(rad, Math.max(1e-4, r * sr))), nr, [s / seg, 0]);
+    } return base; };
+  const rows = [];
+  // start cap
+  rows.push(ring(V3.add(pts[0], V3.mul(T[0], -radii[0] * 0.55)), frames[0][0], frames[0][1], radii[0] * 0.35, 0, V3.mul(T[0], -1)));
+  for (let k = 0; k < n; k++) rows.push(ring(pts[k], frames[k][0], frames[k][1], radii[k], (twist || 0) * k, null));
+  rows.push(ring(V3.add(pts[n - 1], V3.mul(T[n - 1], radii[n - 1] * 0.55)), frames[n - 1][0], frames[n - 1][1], radii[n - 1] * 0.35, (twist || 0) * (n - 1), T[n - 1]));
+  for (let q = 0; q < rows.length - 1; q++) for (let s = 0; s < seg; s++) { const a = rows[q] + s, b = rows[q + 1] + s; mb.quad(a, a + 1, b + 1, b); }
 }
 
 // ellipsoid into builder (center c, axes ex,ey,ez)
@@ -1414,7 +1457,7 @@ function updatePress(dt) {
     let r = spring(b.dent, b.dentV, b.pressing ? 1 : 0, b.pressing ? 900 : 260, b.pressing ? 34 : 9, dt); b.dent = r[0]; b.dentV = r[1];
     r = spring(b.squash, b.sqV, b.pressing ? 0.6 + 0.08 * Math.sin(G.time * 9) : 0, 140, 10, dt); b.squash = r[0]; b.sqV = r[1];
     r = spring(b.bounce, b.bounceV, 0, 160, 7, dt); b.bounce = r[0]; b.bounceV = r[1];
-    b.glow = approach(b.glow, (G.invite === b.id && G.press.bag < 0) ? 1 : 0, 4, dt);
+    b.glow = approach(b.glow, (G.invite === b.id && G.press.bag < 0 && !(G.act && G.act.blocks && G.act.blocks.indexOf(b.id) >= 0)) ? 1 : 0, 4, dt);
     if (b.wigT > 0) b.wigT -= dt;
   }
   const id = G.press.bag; if (id < 0) return;
@@ -2007,7 +2050,7 @@ void main(){ vec2 uv = vec2(mix(uCrop.x, uCrop.z, vUV.x), mix(uCrop.y, uCrop.w, 
 const RS = { ready: false, tex: {}, mesh: {}, field: {}, dyn: {}, scale: 1, frameMs: 16, lowCount: 0 };
 const COL = {
   steel: lin('#c9ced3'), enamel: lin('#f2f5f7'), porcelain: lin('#f6f5f1'), pist: lin('#b9c98f'), rose: lin('#efc3c4'),
-  pistIn: lin('#aebf72'), roseIn: lin('#eebcba'), glove: lin('#f2f4f6'), sleeve: lin('#dfe4e9'), nozzle: lin('#d8dce0'),
+  pistIn: lin('#aebf72'), roseIn: lin('#eebcba'), glove: lin('#e9eef3'), sleeve: lin('#b4bfca'), nozzle: lin('#d8dce0'),
   cream: lin('#f2deb6'), platter: lin('#b9bfc5'), jam: lin('#a6111f'), jamBag: lin('#b81d30'),
 };
 const LIGHT = { dir: V3.norm([-0.45, 0.78, -0.42]), col: [2.15, 2.25, 2.42], sky: [0.30, 0.34, 0.40], ground: [0.22, 0.21, 0.20] };
@@ -2084,10 +2127,19 @@ function fillField(g, buf, mode, rows) {
   const jj0 = Math.max(0, j0 - 1), jj1 = Math.min(nz - 1, j1 + 1);
   const sign = mode === 'TP' ? -1 : 1;
   const B0 = g.B0 || B;
+  const ja = Math.max(0, j0 - 3), jb = Math.min(nz - 1, j1 + 3);
+  const Hr = fillField.R && fillField.R.length >= g.N ? fillField.R : (fillField.R = new Float32Array(Math.max(g.N, TNX * TNZ)));
+  const Ht = fillField.T && fillField.T.length >= g.N ? fillField.T : (fillField.T = new Float32Array(Math.max(g.N, TNX * TNZ)));
+  for (let j = ja; j <= jb; j++) for (let i = 0; i < nx; i++) { const k = j * nx + i; Hr[k] = C[k] + U[k] + J[k] + (g.K[k] > 0.5 && C[k] > 0.05 ? 0.06 : 0); }
+  for (let pass = 0; pass < 2; pass++) {
+    for (let j = ja; j <= jb; j++) { const o = j * nx; for (let i = 0; i < nx; i++) { const k = o + i; Ht[k] = (Hr[i > 0 ? k - 1 : k] + 2 * Hr[k] + Hr[i < nx - 1 ? k + 1 : k]) * 0.25; } }
+    for (let j = ja; j <= jb; j++) { const o = j * nx; for (let i = 0; i < nx; i++) { const k = o + i; Hr[k] = (Ht[j > ja ? k - nx : k] + 2 * Ht[k] + Ht[j < jb ? k + nx : k]) * 0.25; } }
+  }
   for (let j = jj0; j <= jj1; j++) for (let i = 0; i < nx; i++) {
-    const k = j * nx + i; const m = C[k] + U[k] + J[k];
-    const base = mode === 'P' ? (m > 0.006 ? B[k] : B0[k]) : 0;
-    Hh[k] = base + sign * (m > 0.006 ? m + 0.004 : -0.05);
+    const k = j * nx + i; const m = C[k] + U[k] + J[k]; const hb = Math.max(Hr[k], m * 0.55);
+    const has = m > 0.006;
+    const base = mode === 'P' ? (has ? B[k] : B0[k]) : 0;
+    Hh[k] = base + sign * (has ? hb + 0.004 : (hb > 0.004 ? hb - 0.012 : -0.05));
   }
   const c2 = 2 * g.cell;
   for (let j = j0; j <= j1; j++) for (let i = 0; i < nx; i++) {
@@ -2135,7 +2187,7 @@ function setCommon(p) {
   if (u.uLightVP) gl.uniformMatrix4fv(u.uLightVP, false, lightVP);
   if (u.uShadowTexel) gl.uniform1f(u.uShadowTexel, 1 / SHADOW_SIZE);
   if (u.uWinDir) gl.uniform3fv(u.uWinDir, RS.winDir);
-  if (u.uExposure) gl.uniform1f(u.uExposure, 0.9);
+  if (u.uExposure) gl.uniform1f(u.uExposure, 0.83);
   if (u.uEnvYaw) gl.uniform1f(u.uEnvYaw, CAM.yaw);
   const bindT = (name, unit, tex) => { if (u[name] != null) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(u[name], unit); } };
   bindT('uShadow', 0, shadowTex); bindT('uEnv', 1, RS.tex.env); bindT('uDetA', 2, RS.tex.detA); bindT('uDetB', 3, RS.tex.detB); bindT('uDetC', 4, RS.tex.detC);
@@ -2156,7 +2208,7 @@ function drawField(mesh, model, baseKind) {
   if (passShadow) { const p = P.shadow; useProg(p); gl.uniformMatrix4fv(p.u.uModel, false, model); gl.uniformMatrix4fv(p.u.uLightVP, false, lightVP); bindMesh(mesh, p); gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0); return; }
   const p = P.field; useProg(p); const u = p.u;
   gl.uniformMatrix4fv(u.uModel, false, model); gl.uniformMatrix3fv(u.uNMat, false, M4.normalMat(model));
-  gl.uniform1f(u.uRidgeL, 0.17); gl.uniform1f(u.uBaseKind, baseKind);
+  gl.uniform1f(u.uRidgeL, 0.3); gl.uniform1f(u.uBaseKind, baseKind);
   bindMesh(mesh, p); gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
 function drawBlob(x, y, z, sx, sz, str, soft) {
@@ -2224,8 +2276,8 @@ function buildBagMesh(b) {
   const up = [0, 1, 0];
   const P2 = V3.add(V3.sub(P3, V3.mul(ax, 1.2)), [0, 0.15, 0]);
   const hop = (b.hop || 0) + (b.bounce || 0) * 0.25;
-  P0[1] += hop;
-  const P1 = V3.add(V3.lerp(P0, P2, 0.5), [0, 0.5 + hop * 0.8, 0]);
+  P0[1] += hop; P2[1] += hop * 0.8;
+  const P1 = V3.add(V3.lerp(P0, P2, 0.5), [0, 0.5 + hop, 0]);
   b.curve = [P0, P1, P2, P3];
   const NT = 30, NS = 20; const mb = new MB();
   const fillStart = 1 - (0.12 + 0.8 * b.fill);
@@ -2237,7 +2289,7 @@ function buildBagMesh(b) {
   for (let k = 0; k <= NT; k++) {
     const t = k / NT, c = cen[k], T = tan[k];
     let Nn = V3.sub(up, V3.mul(T, V3.dot(up, T))); if (V3.len(Nn) < 1e-3) Nn = [1, 0, 0]; Nn = V3.norm(Nn); const Bn = V3.cross(T, Nn);
-    let r0 = bagProfile(t);
+    let r0 = bagProfile(t) * (1 + 0.08 * (b.hop || 0) / 0.32 * Math.exp(-Math.pow((t - 0.4) / 0.2, 2)));
     const empty = t < fillStart;
     if (empty) r0 *= 0.6 + 0.4 * smooth(fillStart - 0.12, fillStart, t);
     const gd = Math.exp(-Math.pow((t - b.pressT) / 0.12, 2));
@@ -2363,38 +2415,58 @@ function rebuildCrumbs() {
 }
 
 // ---- seam lips: what is squeezed out between the shells, seen at the rim ----
+function smoothBins(src, off) { // circular [1,2,3,2,1]/9 smoothing of a per-bin channel
+  const out = smoothBins[off] || (smoothBins[off] = new Float32Array(NBINS)); const w = [1, 2, 3, 2, 1];
+  for (let b = 0; b < NBINS; b++) { let s = 0; for (let k = -2; k <= 2; k++) s += w[k + 2] * src[((b + k + NBINS) % NBINS) * 2 + off]; out[b] = s / 9; }
+  return out;
+}
+function lipRuns(arr, thr) { // contiguous circular runs of bins above thr: [[start, len], ...]
+  const runs = []; let all = true; for (let b = 0; b < NBINS; b++) if (arr[b] <= thr) { all = false; break; }
+  if (all) return [[0, NBINS, true]];
+  let b0 = 0; while (arr[b0] > thr) b0++;
+  for (let q = 0; q < NBINS; q++) { const b = (b0 + q) % NBINS; if (arr[b] > thr && (q === 0 || arr[(b - 1 + NBINS) % NBINS] <= thr)) { let len = 0; while (len < NBINS && arr[(b + len) % NBINS] > thr) len++; runs.push([b, len, false]); } }
+  return runs;
+}
 function buildLips() {
   const mc = new MB(), mj = new MB(); const arc = R * TAU / NBINS;
   if (G.bottom.state === 'tray') {
-    for (let b = 0; b < NBINS; b++) {
-      const lc = G.lip[b * 2], lj = G.lip[b * 2 + 1];
-      const a0 = b / NBINS * TAU, a1 = (b + 1) / NBINS * TAU, am = (a0 + a1) / 2;
-      if (lc > 0.002) {
-        const rr = clamp(Math.sqrt(lc / (Math.PI * arc)) * 1.1, 0.06, 0.34); const y = seamY(am);
-        const p0 = [MAC.x + Math.cos(a0 - 0.02) * (R + rr * 0.45), y, MAC.z + Math.sin(a0 - 0.02) * (R + rr * 0.45)], p1 = [MAC.x + Math.cos(a1 + 0.02) * (R + rr * 0.45), seamY(a1), MAC.z + Math.sin(a1 + 0.02) * (R + rr * 0.45)];
-        capsuleInto(mc, p0, p1, rr, rr, 8);
-        if (G.lipFeed[b] > 0 && !isChipBin(b)) { // drip connecting seam and foot
-          const q0 = [MAC.x + Math.cos(am) * (R + rr * 0.9), y - rr * 0.3, MAC.z + Math.sin(am) * (R + rr * 0.9)], q1 = [MAC.x + Math.cos(am) * (R + 0.36), TRAY.h + 0.12, MAC.z + Math.sin(am) * (R + 0.36)];
-          capsuleInto(mc, q0, q1, rr * 0.75, 0.2, 7);
-        }
+    // cream squeezed out at the seam: one continuous soft bead per run
+    const lcS = smoothBins(G.lip, 0), ljS = smoothBins(G.lip, 1);
+    for (const [b0, len, full] of lipRuns(lcS, 0.0015)) {
+      const pts = [], rad = []; const steps = len * 2 + (full ? 1 : 0);
+      for (let q = 0; q <= steps; q++) {
+        const fb = b0 + q / 2; const bi = Math.floor(fb) % NBINS; const a = (fb + 0.5) / NBINS * TAU;
+        let rr = clamp(Math.sqrt(lcS[bi] / (Math.PI * arc)) * 1.1, 0.05, 0.32);
+        if (!full) rr *= smooth(0, 2.5, q) * smooth(0, 2.5, steps - q) * 0.85 + 0.15;
+        rr *= 0.92 + 0.16 * vnoise(fb * 0.7, 3.1);
+        pts.push([MAC.x + Math.cos(a) * (R + rr * 0.5), seamY(a), MAC.z + Math.sin(a) * (R + rr * 0.5)]); rad.push(rr);
       }
-      if (lj > 0.0015) { // red band: sits low on the seam and slightly proud of the cream bead
-        const rr = clamp(Math.sqrt(lj / (Math.PI * arc)) * 1.25, 0.05, 0.16); const yb = faceY() + rr * 0.6;
-        const ro = R + 0.12 + rr * 0.5;
-        const p0 = [MAC.x + Math.cos(a0 - 0.03) * ro, yb, MAC.z + Math.sin(a0 - 0.03) * ro], p1 = [MAC.x + Math.cos(a1 + 0.03) * ro, yb, MAC.z + Math.sin(a1 + 0.03) * ro];
-        capsuleInto(mj, p0, p1, rr, rr, 7);
-      }
+      tubeAlong(mc, pts, rad, 12, 0.06, 0.9);
     }
-    // cantilevered chip ropes: the macaron itself pipes a thick petal
+    // jam squeezed out under it: a thin glossy band tucked low on the seam
+    for (const [b0, len, full] of lipRuns(ljS, 0.0012)) {
+      const pts = [], rad = []; const steps = len * 2 + (full ? 1 : 0);
+      for (let q = 0; q <= steps; q++) {
+        const fb = b0 + q / 2; const bi = Math.floor(fb) % NBINS; const a = (fb + 0.5) / NBINS * TAU;
+        let rr = clamp(Math.sqrt(ljS[bi] / (Math.PI * arc)) * 1.25, 0.05, 0.15);
+        if (!full) rr *= smooth(0, 2.5, q) * smooth(0, 2.5, steps - q) * 0.8 + 0.2;
+        rr *= 0.88 + 0.24 * vnoise(fb * 0.9, 7.7);
+        const ro = R + 0.07 + rr * 0.35;
+        pts.push([MAC.x + Math.cos(a) * ro, faceY() + rr * 0.55, MAC.z + Math.sin(a) * ro]); rad.push(rr);
+      }
+      tubeAlong(mj, pts, rad, 9, 0, 0);
+    }
+    // cantilevered chip rope: the macaron itself pipes one continuous ridged rope
     for (const h of G.heads) {
       if (!h.cant || !h.chip) continue; if (G.lipFeed[h.bin] <= 0 && G.time - (h.born || 0) > 0.5) continue;
       const a = h.a; const y0 = seamY(a);
-      const s0 = [MAC.x + Math.cos(a) * (R + 0.1), y0, MAC.z + Math.sin(a) * (R + 0.1)];
-      const e = [h.landX, TRAY.h + 0.35, h.landZ];
-      if (h.g === 'P' && !h.child) { const pl = G.plate; e[1] = pl.y + 1.0; }
-      const mid = [lerp(s0[0], e[0], 0.55), Math.max(y0, e[1]) + 0.12, lerp(s0[2], e[2], 0.55)];
-      const N = 6; let prev = s0;
-      for (let q = 1; q <= N; q++) { const t = q / N; const u = 1 - t; const p = [u * u * s0[0] + 2 * u * t * mid[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * mid[1] + t * t * e[1], u * u * s0[2] + 2 * u * t * mid[2] + t * t * e[2]]; capsuleInto(mc, prev, p, 0.36, 0.36, 24, 0, 0.13); prev = p; }
+      const s0 = [MAC.x + Math.cos(a) * (R - 0.05), y0, MAC.z + Math.sin(a) * (R - 0.05)];
+      const e = [h.landX, TRAY.h + 0.3, h.landZ];
+      if (h.g === 'P' && !h.child) { const pl = G.plate; e[1] = pl.y + 0.95; }
+      const mid = [lerp(s0[0], e[0], 0.5), Math.max(y0, e[1]) + 0.1, lerp(s0[2], e[2], 0.5)];
+      const N = 18; const pts = [], rad = [];
+      for (let q = 0; q <= N; q++) { const t = q / N; const u = 1 - t; pts.push([u * u * s0[0] + 2 * u * t * mid[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * mid[1] + t * t * e[1], u * u * s0[2] + 2 * u * t * mid[2] + t * t * e[2]]); rad.push(lerp(0.36, 0.31, t)); }
+      tubeAlong(mc, pts, rad, 32, 0.11, 0.05);
     }
   }
   updateMesh(RS.dyn.lipC, new Float32Array(mc.v), new Uint16Array(mc.i));
@@ -2561,7 +2633,7 @@ function drawScene() {
     drawLit(RS.dyn.sleeve[h.id], M4.ident(), { mat: 8, color: COL.sleeve, rough: 0.9, spec: 0.02 });
   }
 }
-function bagMat(b) { const glow = b.glow * (0.14 + 0.1 * Math.sin(G.time * 4.2)); return { mat: 9, color: [1, 1, 1], rough: 0.25, spec: 0.06, fill: b.uFill || 0, tint: b.id === 0 ? COL.cream : COL.jamBag, glow }; }
+function bagMat(b) { const glow = b.glow * (0.28 + 0.17 * Math.sin(G.time * 4.2)); return { mat: 9, color: [1, 1, 1], rough: 0.25, spec: 0.06, fill: b.uFill || 0, tint: b.id === 0 ? COL.cream : COL.jamBag, glow }; }
 function drawBagsOpaque() { // filled part: opaque, writes depth
   P.lit.p && (useProg(P.lit), gl.uniform1f(P.lit.u.uBagPass, passShadow ? 0 : 1));
   for (const b of G.bags) if (b.tipInit) drawLit(RS.dyn.bag[b.id], M4.ident(), bagMat(b));
@@ -2836,7 +2908,7 @@ function drawOverlay() {
   const drop = (1 - smooth(0, 0.45, t)) * 40;
   octx.setTransform(d, 0, 0, d, 0, 0);
   octx.globalAlpha = 0.85 * fade;
-  const x = c[0] + 6, y = c[1] - 8 - drop - (1 - press) * 14;
+  const sa = CAM.safe; const x = clamp(c[0] + 6, sa[3] + 40, CAM.w - sa[1] - 80), y = clamp(c[1] - 8 - drop - (1 - press) * 14, sa[0] + 20, CAM.h - sa[2] - 130);
   drawHintHand(octx, x, y, 1 + 0.05 * (1 - press), press);
   if (press > 0.5) { octx.globalAlpha = 0.35 * fade * (press - 0.5) * 2; octx.strokeStyle = '#ffffff'; octx.lineWidth = 3; octx.beginPath(); octx.arc(c[0], c[1], 26 + press * 10, 0, TAU); octx.stroke(); }
   octx.globalAlpha = 1;
@@ -2845,7 +2917,7 @@ function drawHintHand(x2, x, y, s, press) {
   x2.save(); x2.translate(x, y); x2.scale(s, s);
   x2.shadowColor = 'rgba(40,50,60,0.35)'; x2.shadowBlur = 10; x2.shadowOffsetY = 4;
   const g = x2.createLinearGradient(-30, -20, 30, 90); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#d9dfe5');
-  x2.fillStyle = g; x2.strokeStyle = 'rgba(120,130,140,0.55)'; x2.lineWidth = 1.5;
+  x2.fillStyle = g; x2.strokeStyle = 'rgba(95,108,122,0.9)'; x2.lineWidth = 2;
   const rr = (px, py, w, h, r) => { x2.beginPath(); x2.moveTo(px + r, py); x2.arcTo(px + w, py, px + w, py + h, r); x2.arcTo(px + w, py + h, px, py + h, r); x2.arcTo(px, py + h, px, py, r); x2.arcTo(px, py, px + w, py, r); x2.closePath(); };
   // index finger pointing down to the touch point (tip at 0,0)
   rr(-9, -2 + press * 3, 18, 58 - press * 6, 9); x2.fill(); x2.stroke();
@@ -2876,17 +2948,20 @@ function updateNozzles(dt) {
       else {
         const tb = V3.norm(V3.sub([bagBack[0], 0, bagBack[2]], [goal[0], 0, goal[2]]));
         axis = V3.norm(V3.add([0, -1, 0], V3.mul(tb, -1.05)));
-        if (!b.pressing) goal = V3.add(goal, [0, 0.55 + 0.08 * Math.sin(G.time * 1.7 + id), 0]);
+        if (!b.pressing) goal = V3.add(goal, [0, 0.55, 0]);
       }
       if (b.pressing) goal = V3.add(goal, [0, -0.12, 0]);
     }
+    if (b.hop > 0 && !b.pressing) goal = V3.add(goal, [0, b.hop * 0.7, 0]); // whole bag (nozzle too) hops when invited
     if (!b.tipInit) { b.tip = goal.slice(); b.tipV = [0, 0, 0]; b.axis = axis; b.tipInit = true; }
     for (let q = 0; q < 3; q++) { const r = spring(b.tip[q], b.tipV[q], goal[q], 260, 30, dt); b.tip[q] = r[0]; b.tipV[q] = r[1]; }
     b.axis = V3.norm(V3.lerp(b.axis, axis, 1 - Math.exp(-dt * 8)));
     // invited bag: small periodic hop (whole bag, no wave)
-    const inv = G.invite === id && G.press.bag < 0;
-    const ph = (G.time % 1.8);
-    b.hop = inv && ph < 0.42 ? Math.sin(ph / 0.42 * Math.PI) * 0.32 : 0;
+    const blocked = G.act && G.act.blocks && G.act.blocks.indexOf(id) >= 0;
+    const inv = G.invite === id && G.press.bag < 0 && !blocked;
+    const ph = (G.time % 1.6);
+    b.hop = inv && ph < 0.45 ? Math.sin(ph / 0.45 * Math.PI) * 0.36 : 0;
+
   }
 }
 
