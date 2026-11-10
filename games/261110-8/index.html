@@ -1203,10 +1203,11 @@ function simOven(dt){
     if((raw&&r>2.3)||r>4.0){const wk=ED.wk[e];killEdge(e);emit('unweld',{wk,x:(P.x[a]+P.x[b])/2,z:(P.z[a]+P.z[b])/2});if(wk===1&&POCKET.air>0.3)POCKET.vent=TIME.t+1.6;}}
   // splits / tears
   let sp=0;
-  for(let e=0;e<ED.n&&sp<26;e++){if(!ED.alive[e]||ED.type[e])continue;if(ED.rest[e]<=1.6*S0)continue;
+  const splitTh=1.6*S0*(1+2.2*sstep(700,1000,P.cnt));const noSplit=P.cnt>=1000;
+  for(let e=0;e<ED.n&&sp<26;e++){if(!ED.alive[e]||ED.type[e])continue;if(ED.rest[e]<=splitTh)continue;
     const a=ED.a[e],b=ED.b[e];
     if(P.thick[a]<0.0052&&P.thick[b]<0.0052&&(P.soft[a]||P.soft[b])){tearEdge(e);sp++;}
-    else if(splitEdge(e))sp++;else break;}
+    else if(!noSplit&&splitEdge(e))sp++;else if(noSplit)continue;else break;}
   if(sp)computeDerived();
   weldLayerPass(dt);
   // motion amount
@@ -2281,7 +2282,7 @@ function inviteUpdate(dt){
     if(nv&&prev&&prev.kind===nv.kind&&P.alive[prev.i]&&Math.hypot(P.x[prev.i]-P.x[nv.i],P.z[prev.i]-P.z[nv.i])<0.12){G.invite=prev;prev.dir=nv.dir;prev.dist=nv.dist;}else{G.invite=nv;G.invDecay=0.6;GF.forceFrames=45;if(nv)G.inviteT=0;}}
   const inv=G.invite;
   if(inv&&G.phase==='oven'){const key={ear:'d1',wing:'d1',rewind:'d2',pivot:'d3',pocket:'d4',open:'d4',ring:'d5',ringpull:'d5'}[inv.kind];
-    if(key&&TIME.t-G.lastInput<20){G.rto[key]=(G.rto[key]||0)+dt;if(G.rto[key]>55&&G.rdone[key]!==1){G.rdone[key]='skip';G.inviteEval=0;}}}
+    if(key&&TIME.t-G.lastInput<20){G.rto[key]=(G.rto[key]||0)+dt;if(G.rto[key]>40&&G.rdone[key]!==1){G.rdone[key]='skip';G.inviteEval=0;}}}
   for(let i=0;i<P.n;i++){P.sag[i]*=0.85;P.glow[i]*=0.85;}
   G.inviteAnim=G.invDecay>0;if(G.invDecay>0)G.invDecay-=dt;
   if(!inv||!P.alive[inv.i]||DRAG.active||(G.phase!=='oven'&&G.phase!=='plate'))return;
