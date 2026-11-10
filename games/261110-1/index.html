@@ -511,7 +511,7 @@ function updateMesh(m, verts, idx) {
   gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
   if (verts.length / (m.layout === 'field' ? 14 : 8) > m.nverts || m.recreate) {
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW); m.nverts = (verts.length / (m.layout === 'field' ? 14 : 8)) | 0;
-  } else gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
+  } else if (verts.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
   if (idx) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.DYNAMIC_DRAW);
@@ -933,8 +933,9 @@ class Grid {
   cz(j) { return this.z0 + (j + 0.5) * this.cell; }
   toIJ(x, z) { return [Math.floor((x - this.x0) / this.cell), Math.floor((z - this.z0) / this.cell)]; }
   inside(i, j) { return i >= 0 && j >= 0 && i < this.nx && j < this.nz; }
-  grow(i, j, m) { m = m || 2; const b = this.box; b[0] = Math.max(0, Math.min(b[0], i - m)); b[1] = Math.min(this.nx - 1, Math.max(b[1], i + m)); b[2] = Math.max(0, Math.min(b[2], j - m)); b[3] = Math.min(this.nz - 1, Math.max(b[3], j + m)); this.dirty = true; this.awake = 40; }
-  clearAll() { this.C.fill(0); this.J.fill(0); this.U.fill(0); this.S.fill(0); this.A.fill(0); this.K.fill(0); this.box = [this.nx, 0, this.nz, 0]; this.dirty = true; this.fullDirty = true; }
+  grow(i, j, m) { m = m || 2; this.markRows(j - m, j + m); const b = this.box; b[0] = Math.max(0, Math.min(b[0], i - m)); b[1] = Math.min(this.nx - 1, Math.max(b[1], i + m)); b[2] = Math.max(0, Math.min(b[2], j - m)); b[3] = Math.min(this.nz - 1, Math.max(b[3], j + m)); this.dirty = true; this.awake = 40; }
+  clearAll() { this.C.fill(0); this.J.fill(0); this.U.fill(0); this.S.fill(0); this.A.fill(0); this.K.fill(0); this.dC.fill(0); this.dJ.fill(0); this.dU.fill(0); this.box = [this.nx, 0, this.nz, 0]; this.dirty = true; this.fullDirty = true; this.rows = null; }
+  markRows(j0, j1) { if (!this.rows) this.rows = [j0, j1]; else { if (j0 < this.rows[0]) this.rows[0] = j0; if (j1 > this.rows[1]) this.rows[1] = j1; } this.dirty = true; }
   surf(k) { return this.B[k] + this.C[k] + this.U[k] + this.J[k]; }
   mat(k) { return this.C[k] + this.U[k] + this.J[k]; }
   sample(x, z) { const i = Math.floor((x - this.x0) / this.cell), j = Math.floor((z - this.z0) / this.cell); if (i < 0 || j < 0 || i >= this.nx || j >= this.nz) return null; return j * this.nx + i; }
@@ -1001,19 +1002,22 @@ function flowJam(g, dt, drive, onExit, domeYield) {
     if (f0) dJ[k + 1] += f0 * s; if (f1) dJ[k - 1] += f1 * s; if (f2) dJ[k + nx] += f2 * s; if (f3) dJ[k - nx] += f3 * s;
     if (out > 1e-4) moved++;
   }
-  if (!moved) { g.awake--; return; }
-  let nb0 = b[0], nb1 = b[1], nb2 = b[2], nb3 = b[3];
+  if (!moved) g.awake--;
+  let nb0 = b[0], nb1 = b[1], nb2 = b[2], nb3 = b[3]; let cj0 = 1e9, cj1 = -1;
   const jj0 = Math.max(0, j0 - 1), jj1 = Math.min(nz - 1, j1 + 1), ii0 = Math.max(0, i0 - 1), ii1 = Math.min(nx - 1, i1 + 1);
   for (let j = jj0; j <= jj1; j++) for (let i = ii0; i <= ii1; i++) {
     const k = j * nx + i; const d = dJ[k]; if (d === 0) continue; dJ[k] = 0;
     J[k] += d; if (J[k] < 0) J[k] = 0;
+    if (j < cj0) cj0 = j; if (j > cj1) cj1 = j;
     if (d > 0) {
       if (W[k] === 3 && onExit) { onExit(k, 0, J[k], 0); J[k] = 0; }
       if (i < nb0) nb0 = i; if (i > nb1) nb1 = i; if (j < nb2) nb2 = j; if (j > nb3) nb3 = j;
     }
   }
+  if (!moved) return; // sub-threshold creep is applied silently (no re-upload)
   b[0] = Math.max(0, nb0 - 1); b[1] = Math.min(nx - 1, nb1 + 1); b[2] = Math.max(0, nb2 - 1); b[3] = Math.min(nz - 1, nb3 + 1);
-  g.dirty = true; g.awake = Math.max(g.awake, 20);
+  if (cj1 >= 0) g.markRows(cj0, cj1);
+  g.awake = Math.max(g.awake, 20);
 }
 
 // cream slump only when steeper than the yield slope
@@ -1037,14 +1041,12 @@ function flowCream(g, dt, onExit) {
     if (f0) dC[k + 1] += f0 * s; if (f1) dC[k - 1] += f1 * s; if (f2) dC[k + nx] += f2 * s; if (f3) dC[k - nx] += f3 * s;
     if (out > 1e-4) moved++;
   }
-  if (!moved) return;
   for (let j = Math.max(0, j0 - 1); j <= Math.min(nz - 1, j1 + 1); j++) for (let i = Math.max(0, i0 - 1); i <= Math.min(nx - 1, i1 + 1); i++) {
-    const k = j * nx + i; const d = dC[k]; if (d === 0) continue; dC[k] = 0;
+    const k = j * nx + i; const d = dC[k]; if (d === 0) continue; dC[k] = 0; g.markRows(j, j);
     if (d > 0) { normalizeLayer(g, k, d); if (C[k] < 0.03) { g.A[k] *= 0.8; } }
     C[k] = Math.max(0, C[k] + d);
-    if (d > 0) { g.grow(i, j, 1); if (W[k] === 3 && onExit) { onExit(k, C[k], 0, 0); C[k] = 0; } }
+    if (d > 0 && moved) { g.grow(i, j, 1); if (W[k] === 3 && onExit) { onExit(k, C[k], 0, 0); C[k] = 0; } }
   }
-  g.dirty = true;
 }
 
 // ---- top-shell support plane: lowest plane above the supports, over the centre ----
@@ -1130,7 +1132,7 @@ function squeeze(F, ceil, iters, onExit, plugA) {
     if (!any) break;
     for (let k = 0; k < N; k++) {
       const dc = F.dC[k], dj = F.dJ[k], du = F.dU[k]; if (dc === 0 && dj === 0 && du === 0) continue;
-      F.dC[k] = 0; F.dJ[k] = 0; F.dU[k] = 0;
+      F.dC[k] = 0; F.dJ[k] = 0; F.dU[k] = 0; const jr = (k / nx) | 0; F.markRows(jr, jr);
       if (dc > 0) normalizeLayer(F, k, dc);
       C[k] = Math.max(0, C[k] + dc); J[k] = Math.max(0, J[k] + dj); U[k] = Math.max(0, U[k] + du);
       if (W[k] === 3) { const m = C[k] + J[k] + U[k]; if (m > 0) { onExit(k, C[k], J[k], U[k]); total += m; } C[k] = 0; J[k] = 0; U[k] = 0; }
@@ -1233,11 +1235,11 @@ function setupT() {
   T.film = J_FILM_T;
   return T;
 }
-function setTrayDrive() { // gentle invisible slope toward the viewer (+ a little away from the shell)
-  const T = G.T; const f = CAM.mode === 'land' ? [-1, 0] : [0, -1]; const yc = T.jy; // toward screen-left
+function setTrayDrive() { // gentle invisible slope: away from the shell, a little toward the viewer
+  const T = G.T; const f = CAM.mode === 'land' ? [0, 1] : [-1, 0]; const yc = T.jy;
   for (let j = 0; j < TNZ; j++) for (let i = 0; i < TNX; i++) {
     const k = T.idx(i, j), x = T.cx(i), z = T.cz(j); const dx = x - MAC.x, dz = z - MAC.z, d = Math.hypot(dx, dz) || 1;
-    T.G[k * 2] = (f[0] * 0.75 + dx / d * 0.35) * yc; T.G[k * 2 + 1] = (f[1] * 0.75 + dz / d * 0.35) * yc;
+    T.G[k * 2] = (f[0] * 0.3 + dx / d * 0.6) * yc; T.G[k * 2 + 1] = (f[1] * 0.3 + dz / d * 0.6) * yc;
   }
 }
 function setupP() {
@@ -1261,7 +1263,7 @@ function refreshTrayWalls() {
   for (let j = 0; j < TNZ; j++) for (let i = 0; i < TNX; i++) {
     const k = T.idx(i, j), x = T.cx(i), z = T.cz(j);
     let w = 0;
-    if (i === 0 || j === 0 || i === TNX - 1 || j === TNZ - 1) w = 1;
+    if (i === 0 || j === 0 || i === TNX - 1 || j === TNZ - 1) w = 3; // tray lip: jam that reaches it runs off the edge
     if (G.bottom && G.bottom.state === 'tray' && Math.hypot(x - MAC.x, z - MAC.z) < R + 0.06) w = 1;
     if (G.top && G.top.state === 'wait' && Math.hypot(x - G.top.wx, z - G.top.wz) < R + 0.06) w = 1;
     if (pl && pl.onTray && Math.hypot(x - pl.x, z - pl.z) < pl.r - 0.05) w = 2;
@@ -1273,9 +1275,9 @@ function refreshTrayWalls() {
 function standardCrumbs(rng) {
   const out = [];
   const patch = (cx, cz, n, rx, rz) => { for (let q = 0; q < n; q++) { const a = rng() * TAU, d = Math.sqrt(rng()); out.push([cx + Math.cos(a) * d * rx, cz + Math.sin(a) * d * rz, 0.15 + rng() * 0.15, Math.floor(rng() * 3), rng() * TAU]); } };
-  patch(-10.0, -0.5, 30, 0.55, 1.6); // left: jam port path (landscape), tangential
-  patch(-5.6, -5.0, 26, 1.6, 0.5);   // back: jam port path (portrait), tangential
-  patch(-8.6, 4.3, 14, 0.8, 0.6);    // front-left
+  patch(-2.4, 4.4, 30, 1.25, 0.6);   // front-right of the shell: ooze/jam path (landscape), tangential
+  patch(-9.6, 3.6, 28, 0.7, 1.2);    // front-right in portrait view: ooze/jam path (portrait)
+  patch(-10.0, -0.8, 14, 0.55, 1.1); // left
   patch(-0.95, 2.95, 18, 0.9, 0.5);  // between shell and plate, beside the chip corridor
   patch(-1.4, -3.4, 14, 0.8, 0.55);  // back side beside the corridor
   patch(-0.9, 1.25, 6, 0.32, 0.22);  // small cluster at the corridor edge (can split a petal)
@@ -1351,7 +1353,7 @@ function newRound(first) {
   const land = CAM.mode === 'land';
   G.ring = { th0: (land ? 0.8 : 2.6) + (RNG() - 0.5) * 0.4, prog: 0, closed: false }; // start next to the cream bag so its neck never covers the ring start
   G.side = { angle: 0, held: 0, mode: 'gap', cradleA: null };
-  G.jamPort = angWrap((land ? 3.25 : 4.62) + (RNG() - 0.5) * 0.12);
+  G.jamPort = angWrap(G.ring.th0 + 0.45 + (RNG() - 0.5) * 0.12);
   const chipA = (RNG() - 0.5) * 0.6; // chip always faces the plate (+/- 17 deg)
   G.top = { state: 'wait', wx: WAIT.x, wz: WAIT.z, plane: [0, 0, 0], vis: [0, 0, 0], visV: [0, 0, 0], yaw: 0.9, chip: { a: chipA, w: 0.34 }, chipWorld: chipA, pos: [WAIT.x, TRAY.h, WAIT.z], flip: 0, lift: 0, pressDown: 0 };
   G.bottom = { state: 'tray', pos: [MAC.x, TRAY.h + SHELL_THICK, MAC.z] };
@@ -1428,7 +1430,7 @@ function pressEnd(id) {
   b.pressing = false; b.dentV -= 12; b.sqV -= 6; b.bounceV += 5;
   sfx.release(id); sfx.flowStop();
   const held = G.time - (b.pressStartT || G.time);
-  G.press.bag = -1; G.press.pid = null;
+  G.press.bag = -1; G.press.pid = null; G.press.puffPending = 0;
   if (G.phase === 'B' && id === 0) {
     if (G.side.mode === 'cradle') { G.side.mode = 'gap'; G.side.angle = G.side.cradleA; G.side.cradleA = null; }
     else if (held < 0.55) G.side.angle = angWrap(G.side.angle + 0.1);
@@ -1444,7 +1446,7 @@ function doDeposit(id, vol, puff) {
   if (tg.grid === 'F') {
     deposit(G.F, tg.x, tg.z, vol, id, tg.rad, dx, dz);
     if (G.phase === 'A') { if (id === 0) G.stats.creamA += vol; else { G.stats.jamA += vol; if (G.ring.closed) G.stats.jamAfterClose += vol; } }
-    else { G.planeDirty = true; if (id === 1) G.stats.jamB += vol; }
+    else { G.planeDirty = true; if (id === 1) { G.stats.jamB += vol; if (G.disc.d4a) G.stats.jamSinceBank = (G.stats.jamSinceBank || 0) + vol; } }
   } else if (tg.grid === 'T') {
     deposit(G.T, tg.x, tg.z, vol, id, tg.rad, null, null);
   } else if (tg.grid === 'P') {
@@ -1490,7 +1492,8 @@ function onRelease(id, held) {
     const dirNow = tilt > 0.01 ? Math.atan2(-G.top.plane[2], -G.top.plane[1]) : null;
     const dirChanged = G.stats.lastPieceDir == null || dirNow == null || Math.abs(angDiff(dirNow, G.stats.lastPieceDir)) > 0.6;
     if (!busyPiece && G.stats.piecesPlaced < 6 && tilt > PIECE_TILT && (G.stats.pieceReady || dirChanged)) { startAction(actPlacePiece()); return; }
-    if (G.stats.pressB > 12 && !G.disc.d5a && id === 0 && G.side.mode === 'gap') G.side.angle = angWrap(G.side.angle + angDiff(G.top.chipWorld, G.side.angle) * 0.3);
+    G.stats.timeB = (G.stats.timeB || 0) + held;
+    if ((G.stats.pressB > 10 || G.stats.timeB > 30) && G.plateVol < V_OPEN && G.side.mode === 'gap' && !G.stats.guidedChip) { G.stats.guidedChip = true; G.side.angle = angWrap(G.top.chipWorld - 0.45); logEv('guideChip'); }
   } else if (G.phase === 'D') {
     if (G.bouquetVol >= V_BOUQUET) startAction(actFinale());
   }
@@ -1712,10 +1715,11 @@ const MAX_HEADS = 14;
 function feedRope(bin, a, vol, chip) {
   let h = G.heads.find(q => q.bin === bin && q.alive && !q.split);
   if (!h) {
-    if (G.heads.length >= MAX_HEADS) { // give the volume to the nearest living head
-      let best = null, bd = 9; for (const q of G.heads) { if (!q.alive) continue; const d = Math.abs(angDiff(binAngle(q.bin), a)); if (d < bd) { bd = d; best = q; } }
-      if (best) { best.vq += vol; return; }
-      G.heads.shift();
+    G.heads = G.heads.filter(q => q.alive);
+    if (G.heads.length >= MAX_HEADS) {
+      let best = null, bd = 0.4; for (const q of G.heads) { if (q.chip !== chip) continue; const d = Math.abs(angDiff(binAngle(q.bin), a)); if (d < bd) { bd = d; best = q; } }
+      if (best) { best.vq += vol; best.idle = 0; return; }
+      let oi = 0, ot = -1; G.heads.forEach((q, i) => { if (q.idle > ot) { ot = q.idle; oi = i; } }); G.heads.splice(oi, 1);
     }
     const land = chip ? Math.min(2.6, plateHitDist(a) + 0.35) : 0.38;
     const onPlate = chip && plateHitDist(a) + 0.35 <= 2.6;
@@ -1767,11 +1771,11 @@ function updateRopes(dt) {
     if (h.g === 'P') { h.r = Math.min(0.62, h.r * (1 + d * 0.12)); G.plateVol += vol; }
     else if (!h.chip) h.r = Math.min(0.34, h.r + d * 0.01);
   }
-  if (G.heads.length > 40) G.heads = G.heads.filter(h => h.alive);
+  if (G.tick % 30 === 0) G.heads = G.heads.filter(h => h.alive);
 }
 function branch(h, spread) {
   h.split = true; h.alive = false; if (h.chip) { G.splitEv += 1; logEv('petalSplit', { g: h.g }); }
-  const live = G.heads.filter(q => q.alive).length; if (live > MAX_HEADS - 2) return;
+  const live = G.heads.filter(q => q.alive).length; if (live > MAX_HEADS - 2) { if (h.vq > 0) { h.alive = true; h.split = false; h.stuck = true; } return; }
   for (const s of [-1, 1]) {
     const c = Math.cos(spread * s), sn = Math.sin(spread * s);
     const dx = h.dx * c - h.dz * sn, dz = h.dx * sn + h.dz * c;
@@ -1779,7 +1783,7 @@ function branch(h, spread) {
   }
   h.vq = 0;
 }
-function onCrust(k) { G.crustCount++; G.crumbDirty = true; if (G.crustCount % 4 === 1) sfx.crunch(); if (G.crustCount === 8) { const T = G.T; glint([T.cx(k % T.nx), TRAY.h + 0.4, T.cz((k / T.nx) | 0)], 'd4a'); } }
+function onCrust(k) { G.crustCount++; G.crumbDirtySoft = true; if (G.crustCount % 4 === 1) sfx.crunch(); if (G.crustCount === 8) { const T = G.T; glint([T.cx(k % T.nx), TRAY.h + 0.4, T.cz((k / T.nx) | 0)], 'd4a'); } }
 
 // ---------- contact transfer at reveal ----------
 function transferContact() {
@@ -1940,7 +1944,7 @@ function computeInvite() {
   }
   if (ph === 'B') {
     if (G.side.mode === 'cradle') return 0;
-    if (G.disc.d4a && !G.disc.d4b) return 1;
+    if (G.disc.d4a && !G.disc.d4b && (G.stats.jamSinceBank || 0) < 1.2) return 1;
     if (G.stats.pressB >= 4 && G.stats.jamB < 0.3 && G.crustCount > 2) return 1;
     return 0;
   }
@@ -2002,7 +2006,8 @@ function fitCamera() {
   const asp = w / h; const mode = asp >= 0.9 ? 'land' : 'port';
   CAM.mode = mode; const L = LAYOUTS[mode]; CAM.yaw = L.yaw;
   // fit: margins in NDC from safe area
-  const s = CAM.safe; const mx0 = -1 + 2 * (s[3] + 6) / w, mx1 = 1 - 2 * (s[1] + 6) / w, my0 = -1 + 2 * (s[2] + 4) / h, my1 = 1 - 2 * (s[0] + 4) / h;
+  const s = CAM.safe; let mx0 = -1 + 2 * (s[3] + 6) / w, mx1 = 1 - 2 * (s[1] + 6) / w, my0 = -1 + 2 * (s[2] + 4) / h, my1 = 1 - 2 * (s[0] + 4) / h;
+  if (mx1 - mx0 < 0.2 || my1 - my0 < 0.2) { mx0 = -1; mx1 = 1; my0 = -1; my1 = 1; }
   const pts = L.fit.slice();
   // bag bodies must be fully inside too
   for (const b of L.bag) { const tip = [MAC.x, 0, MAC.z]; const q = V3.lerp(b, tip, 0.2); pts.push([q[0], 2.6, q[2]]); pts.push(V3.lerp(b, tip, 0.06)); }
@@ -2017,7 +2022,7 @@ function fitCamera() {
     const right = mode === 'land' ? [1, 0, 0] : [0, 0, 1], fwd = mode === 'land' ? [0, 0, -1] : [1, 0, 0];
     const k = dist * Math.tan(m.fovV / 2) * 0.9;
     target = V3.add(target, V3.add(V3.mul(right, cxN * k * asp * 0.8), V3.mul(fwd, cyN * k * 0.95)));
-    dist *= Math.pow(sc, 0.85);
+    if (isFinite(sc) && sc > 1e-3) dist *= Math.pow(sc, 0.85);
   }
   const m = camMatrices(L, target, dist, asp);
   CAM.eye = m.eye; CAM.target = target; CAM.view = m.view; CAM.proj = m.proj; CAM.vp = m.vp; CAM.ivp = M4.invert(m.vp); CAM.dist = dist; CAM.fovV = m.fovV;
@@ -2056,7 +2061,7 @@ const COL = {
 const LIGHT = { dir: V3.norm([-0.45, 0.78, -0.42]), col: [2.15, 2.25, 2.42], sky: [0.30, 0.34, 0.40], ground: [0.22, 0.21, 0.20] };
 
 function loadTex(name, src, repeat, fallback) {
-  RS.tex[name] = fallback ? texFromImage(fallback, repeat) : null;
+  if (fallback) RS.tex[name] = texFromImage(fallback, repeat);
   if (!src) return;
   const img = new Image();
   img.onload = () => { try { RS.tex[name] = texFromImage(img, repeat); RS.texOK = (RS.texOK || 0) + 1; } catch (e) { } };
@@ -2065,6 +2070,7 @@ function loadTex(name, src, repeat, fallback) {
 }
 function initGL() {
   if (!gl) return;
+  gl.getExtension('OES_standard_derivatives');
   buildPrograms();
   P.wall = makeProgram(VS_WALL, FS_WALL, ['aPos', 'aNor', 'aUV']);
   buildShadowFB();
@@ -2166,7 +2172,8 @@ function uploadField(name, g, mode) {
   if (!g || !g.dirty) return;
   const F = RS.field; const buf = F['buf' + name], mesh = F[name];
   let rows = null;
-  if (mode === 'T' || mode === 'P') { const b = g.box; if (b[0] > b[1]) { rows = [0, -1]; } else rows = [b[2] - 1, b[3] + 1]; if (g.fullDirty) { rows = null; g.fullDirty = false; } }
+  if (mode === 'T' || mode === 'P') { rows = g.rows ? [g.rows[0] - 4, g.rows[1] + 4] : [0, -1]; if (g.fullDirty) { rows = null; g.fullDirty = false; } }
+  g.rows = null;
   const [j0, j1] = fillField(g, buf, mode, rows);
   gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vbo);
   if (j1 >= j0) gl.bufferSubData(gl.ARRAY_BUFFER, j0 * g.nx * 14 * 4, buf.subarray(j0 * g.nx * 14, (j1 + 1) * g.nx * 14));
@@ -2268,7 +2275,9 @@ function bagProfile(t) { // a cone: twisted top, wide shoulder, straight taper t
   if (t < 0.15) return lerp(0.5, 1.5, smooth(0.05, 0.15, t));
   return lerp(1.5, 0.36, Math.pow((t - 0.15) / 0.85, 0.8));
 }
+function bagSig(b) { return [b.dent, b.squash, b.bounce, b.hop, b.fill, b.pressT, b.tip[0], b.tip[1], b.tip[2], b.axis[0], b.axis[1], b.axis[2], CAM.mode === 'land' ? 1 : 2].map(v => Math.round(v * 400)).join(','); }
 function buildBagMesh(b) {
+  const sig = bagSig(b); if (sig === b.sig && b.rings) return; b.sig = sig;
   const L = layoutPts(); const id = b.id;
   const P0 = L.bag[id].slice();
   const ax = b.axis || [0, -1, 0];
@@ -2312,7 +2321,7 @@ function buildBagMesh(b) {
   for (let k = 0; k <= 4; k++) { const tt = k / 4; const c = V3.add(tail0, V3.mul(T0, -0.9 * tt)); const r = lerp(0.32, 0.12, tt); let Nn = V3.norm(V3.sub(up, V3.mul(T0, V3.dot(up, T0)))); const Bn = V3.cross(T0, Nn); for (let s = 0; s <= 8; s++) { const a = s / 8 * TAU + tt * 2.5; const dir = V3.add(V3.mul(Nn, Math.cos(a)), V3.mul(Bn, Math.sin(a))); mb.vert(V3.add(c, V3.mul(dir, r * (1 + 0.3 * Math.sin(a * 3)))), dir, [0, s / 8]); } }
   for (let k = 0; k < 4; k++) for (let s = 0; s < 8; s++) { const a = tb + k * 9 + s, bb = a + 9; mb.quad(a, bb, bb + 1, a + 1); }
   b.uFill = fillStart;
-  updateMesh(RS.dyn.bag[id], new Float32Array(mb.v), new Uint16Array(mb.i));
+  updateMesh(RS.dyn.bag[id], new Float32Array(mb.v), RS.dyn.bag[id].count === mb.i.length ? null : new Uint16Array(mb.i));
 }
 function nozzleModel(b) {
   const ax = b.axis || [0, -1, 0]; const yv = V3.mul(ax, -1);
@@ -2340,6 +2349,8 @@ function handFrame(h, kind, at) {
 }
 const HS = 1.75;
 function buildHand(h) {
+  const sig = [h.pos[0], h.pos[1], h.pos[2], h.frame.x[0], h.frame.x[1], h.frame.y[0], h.frame.y[2], h.frame.z[0], h.frame.z[1], h.pose.c[0][0], h.pose.c[1][1], h.pose.th[0], h.pose.sp, h.sg].map(v => Math.round(v * 300)).join(',');
+  if (sig === h.sig) return; h.sig = sig;
   const mb = new MB(), ms = new MB();
   const fr = h.frame; const W = h.pos; const sg = h.sg || 1; const pose = h.pose;
   const X = fr.x, Y = fr.y, Z = fr.z;
@@ -2370,8 +2381,8 @@ function buildHand(h) {
   const s0 = V3.add(e0, V3.mul(fdir, 1.25 * HS)), s1 = V3.add(e0, V3.mul(fdir, 5 * HS));
   capsuleInto(ms, s0, s1, 0.34 * HS, 0.42 * HS, 14);
   capsuleInto(ms, V3.add(s0, V3.mul(fdir, -0.1 * HS)), V3.add(s0, V3.mul(fdir, 0.22 * HS)), 0.37 * HS, 0.37 * HS, 14);
-  updateMesh(RS.dyn.hand[h.id], new Float32Array(mb.v), new Uint16Array(mb.i));
-  updateMesh(RS.dyn.sleeve[h.id], new Float32Array(ms.v), new Uint16Array(ms.i));
+  updateMesh(RS.dyn.hand[h.id], new Float32Array(mb.v), RS.dyn.hand[h.id].count === mb.i.length ? null : new Uint16Array(mb.i));
+  updateMesh(RS.dyn.sleeve[h.id], new Float32Array(ms.v), RS.dyn.sleeve[h.id].count === ms.i.length ? null : new Uint16Array(ms.i));
 }
 function lerpPose(a, b, t) { return { c: a.c.map((f, i) => f.map((v, j) => lerp(v, b.c[i][j], t))), th: [lerp(a.th[0], b.th[0], t), lerp(a.th[1], b.th[1], t)], sp: lerp(a.sp, b.sp, t) }; }
 function updateHands(dt) {
@@ -2669,7 +2680,7 @@ function renderFrame() {
   // dynamic geometry
   for (const b of G.bags) if (b.tipInit) buildBagMesh(b);
   for (const h of G.hands) if (h.frame && h.pos) buildHand(h);
-  if (G.crumbDirty || (G.frame % 12 === 0 && G.crumbs.some(c => c.stuck))) rebuildCrumbs();
+  if (G.crumbDirty || (G.crumbDirtySoft && G.frame % 10 === 0) || (G.frame % 90 === 0 && G.crumbs.some(c => c.stuck))) { rebuildCrumbs(); G.crumbDirtySoft = false; }
   buildStrings(); buildLips();
   uploadField('F', G.F, 'F'); uploadField('TP', G.TP, 'TP');
   if (G.frame % 2 === 0 || G.T.fullDirty) uploadField('T', G.T, 'T');
@@ -2709,7 +2720,7 @@ const sfx = (function () {
   let ac = null, out = null, nbuf = null, flowN = null; const last = {};
   function init() {
     try {
-      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      if (ac) { if (ac.state !== 'running' && ac.state !== 'closed') ac.resume(); return; }
       const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
       ac = new AC();
       const comp = ac.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
@@ -2751,6 +2762,7 @@ const sfx = (function () {
         flowN = { s, f, g, o, og, lfo };
         g.gain.setTargetAtTime(0.045, t, 0.03); og.gain.setTargetAtTime(0.035, t, 0.05);
       }
+      if (!rl('flowp', 100)) return;
       const k = 1 - Math.exp(-used / 5);
       const base = id === 0 ? 150 : 120;
       flowN.o.frequency.setTargetAtTime(base + 300 * k, t, 0.08);
@@ -2795,7 +2807,7 @@ const sfx = (function () {
       if (M[name]) M[name]();
     },
     suspend() { try { if (ac && ac.state === 'running') ac.suspend(); } catch (e) { } },
-    resume() { try { if (ac && ac.state === 'suspended') ac.resume(); } catch (e) { } },
+    resume() { try { if (ac && ac.state !== 'running' && ac.state !== 'closed') ac.resume(); } catch (e) { } },
   };
 })();
 
@@ -2966,6 +2978,7 @@ function updateNozzles(dt) {
 }
 
 // ===== simulation step ==========================================================
+function trayDrain(k) { G.T.J[k] = 0; G.T.C[k] = 0; }
 function simulate(dt) {
   const F = G.F, T = G.T, Pg = G.P;
   const topOn = G.top.state === 'on';
@@ -2984,7 +2997,7 @@ function simulate(dt) {
     updateLips(dt);
   }
   updateRopes(dt);
-  flowJam(T, dt, true, null); flowJam(T, dt, true, null);
+  flowJam(T, dt, true, trayDrain); flowJam(T, dt, true, trayDrain);
   if (G.tick % 3 === 0) flowCream(T, dt, null);
   if (!G.plate.hidden) { flowJam(Pg, dt, false, null); if (G.tick % 3 === 1) flowCream(Pg, dt, null); }
   if (G.tick % 45 === 0) { T.shrink(); Pg.shrink(); }
@@ -3012,6 +3025,7 @@ const TEST_SCALE = (function () { try { const m = /[?&]scale=([0-9.]+)/.exec(loc
 const TEST_FAST = (function () { try { const m = /[?&]fast=(\d+)/.exec(location.search); return m ? Math.min(12, +m[1]) : 0; } catch (e) { return 0; } })();
 let lastTs = 0, acc = 0, rafId = 0, running = false;
 function resize() {
+  if (window.innerWidth < 40 || window.innerHeight < 40) return;
   const big = Math.min(window.innerWidth, window.innerHeight) >= 700;
   const dpr = Math.min(big ? 1.5 : 2, window.devicePixelRatio || 1);
   const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
@@ -3024,7 +3038,12 @@ function resize() {
   const prevMode = CAM.mode;
   fitCamera();
   RS.lastSize = w + 'x' + h;
-  if (prevMode !== CAM.mode) logEv('orient', { mode: CAM.mode });
+  if (prevMode !== CAM.mode) {
+    logEv('orient', { mode: CAM.mode });
+    if (G.T) setTrayDrive();
+    G.works.forEach((ww, i) => { const d = displaySpot(i); ww.plate.x = d[0]; ww.plate.z = d[2]; ww.plate.y = d[1]; });
+    if (G.press.bag >= 0) stopAllPress();
+  }
 }
 function frame(ts) {
   rafId = requestAnimationFrame(frame);
