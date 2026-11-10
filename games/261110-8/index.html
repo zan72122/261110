@@ -2036,7 +2036,9 @@ function defaultShape(){
     return d<=rr*(1-0.25*t);};
 }
 function maskShape(m){
-  return (x,z)=>{const i=Math.floor((x-MASK.x0)/MASK.cs),j=Math.floor((z-MASK.z0)/MASK.cs);if(i<0||j<0||i>=MASK.w||j>=MASK.h)return false;return m[j*MASK.w+i]===1;};
+  const at=(i,j)=>(i<0||j<0||i>=MASK.w||j>=MASK.h)?0:m[j*MASK.w+i];
+  return (x,z)=>{const fx=(x-MASK.x0)/MASK.cs-0.5,fz=(z-MASK.z0)/MASK.cs-0.5;const i=Math.floor(fx),j=Math.floor(fz);const u=fx-i,v=fz-j;
+    const val=(at(i,j)*(1-u)+at(i+1,j)*u)*(1-v)+(at(i,j+1)*(1-u)+at(i+1,j+1)*u)*v;return val>0.36;};
 }
 function setupDough(mask,rawTongue){
   const bbox={x0:-0.70,x1:0.70,z0:-0.66,z1:0.40};
@@ -2066,7 +2068,7 @@ function setupDough(mask,rawTongue){
 function captureOutline(){
   const m=new Uint8Array(MASK.w*MASK.h);let cnt=0;
   for(let j=0;j<MASK.h;j++)for(let i=0;i<MASK.w;i++){const x=MASK.x0+(i+0.5)*MASK.cs,z=MASK.z0+(j+0.5)*MASK.cs;
-    if(z>0.36)continue;if(sampleGrid(GF.vis,x,z)>0.5){m[j*MASK.w+i]=1;cnt++;}}
+    if(z>0.36)continue;if(sampleGrid(GF.vis,x,z)>0.42){m[j*MASK.w+i]=1;cnt++;}}
   // also count dough that went to the corridor: ignore. Require reasonable size
   if(cnt<110||!validMask(m))return null;
   return m;
@@ -2775,6 +2777,8 @@ W.__pizza={
   fieldLine(z){const out=[];const j=Math.round((z-GF.z0)/GF.cs);for(let i=0;i<GF.nx;i+=3){const k=j*GF.nx+i;out.push([+(GF.x0+i*GF.cs).toFixed(3),+GF.y[k].toFixed(4),+GF.vis[k].toFixed(2),+(GF.dynB[k*16]/255).toFixed(2),+(GF.dynB[k*16+3]/170).toFixed(2),+(GF.dynB[k*16+12]/255).toFixed(2)]);}return out;},
   drag(){return {active:DRAG.active,mode:DRAG.mode,anchor:DRAG.anchor,n:DRAG.list.length,D:DRAG.D,G:DRAG.G,G0:DRAG.G0,demo:DRAG.demo,maxD:DRAG.maxD,over:DRAG.overPlate};},
   dbgP(i){return {alive:P.alive[i],bake:P.bake[i],bakeR:P.bakeR[i],soft:P.soft[i],inD:P.inD[i],thick:P.thick[i],w:P.w[i],x:P.x[i],z:P.z[i],edited:P.edited[i]};},
+  cap(){const m=captureOutline();return m?m.reduce((a,b)=>a+b,0):0;},
+  rebuild(){const m=captureOutline();if(m)setupDough(m,true);return P.cnt;},
   dbgMove(){let mx=0,mi=-1;for(let i=0;i<P.n;i++){if(!P.alive[i])continue;const m=Math.abs(P.x[i]-P.fx[i])+Math.abs(P.z[i]-P.fz[i]);if(m>mx){mx=m;mi=i;}}return mi<0?null:{mx,mi,x:P.x[mi],z:P.z[mi],bake:P.bake[mi],soft:P.soft[mi],bnd:P.bnd[mi],layer:P.layer[mi]};},
   dbgReach(){computePieces();const out=[];for(const pc of PIECES){const d=geodesic(pc.list[0],pc);const un=pc.list.filter(p=>d[p]>1e8);
       const info=un.slice(0,5).map(p=>{let deg=0;for(let e=0;e<ED.n;e++)if(ED.alive[e]&&(ED.a[e]===p||ED.b[e]===p))deg++;return [p,deg,P.alive[p],P.piece[p]];});out.push({n:pc.list.length,un:un.length,info});}return out;},
