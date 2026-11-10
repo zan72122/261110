@@ -289,7 +289,7 @@ void main(){ vec4 w = uModel*vec4(aPos,1.0); vW = w.xyz; vN = normalize(uNMat*aN
 const FS_LIT = GLSL_EXT + GLSL_PREC + GL_COMMON + `
 uniform vec3 uColor; uniform float uRough; uniform float uSpec; uniform float uMetal; uniform float uMat; uniform float uAlpha;
 uniform sampler2D uDetA; uniform sampler2D uDetB; uniform sampler2D uDetC;
-uniform float uGlow; uniform float uFill; uniform vec3 uTint; uniform float uWet; uniform float uBagPass;
+uniform float uGlow; uniform float uFill; uniform vec3 uTint; uniform float uWet; uniform float uBagPass; uniform float uHaze;
 varying vec3 vW; varying vec3 vN; varying vec2 vUV; varying vec3 vL;
 void main(){
   vec3 N = normalize(vN); if(!gl_FrontFacing) N = -N;
@@ -371,13 +371,22 @@ void main(){
   } else if (m > 12.5 && m < 13.5) { // cream (sample filling etc.)
     float d = texture2D(uDetA, vL.xz*0.9).r;
     N = bumpN(N, vW, d, 0.05); rough = 0.42; spec = 0.035; wrap = 0.55;
+  } else if (m > 14.5 && m < 15.5) { // platter: circular brushed stainless
+    float rr = length(vL.xz); float st = vn(vec2(rr*60.0, atan(vL.z, vL.x)*1.5))*0.6 + vn(vec2(rr*7.0, atan(vL.z, vL.x)*3.0))*0.4;
+    alb *= 0.88 + 0.2*st; rough = clamp(uRough + (st-0.5)*0.15, 0.12, 0.8);
+    N = bumpN(N, vW, st, 0.01);
   } else if (m > 13.5 && m < 14.5) { // jam solid
     rough = 0.08; spec = 0.05; wrap = 0.3;
   }
   float sh = shadowAt(vW, N);
   vec3 col = litC(alb, N, V, vW, rough, spec, metal, wrap, ao, sh);
-  if (uGlow > 0.0) { float f = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.0); col += vec3(1.0, 0.97, 0.86) * uGlow * (0.25 + 1.4*f); }
-  gl_FragColor = vec4(tonemap(col), alpha);
+  if (uGlow > 0.0) {
+    if (uColor.r < 0.08) { col += vec3(1.0, 0.55, 0.22) * uGlow * (0.55 + 0.45*vn(vL.xy*3.0)); }
+    else { float f = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 2.0); col += vec3(1.0, 0.97, 0.86) * uGlow * (0.25 + 1.4*f); }
+  }
+  vec3 outc = tonemap(col);
+  outc = mix(outc, vec3(0.86, 0.89, 0.92), uHaze); // depth haze: far objects sit softly behind the sharp foreground
+  gl_FragColor = vec4(outc, alpha);
 }`;
 
 // ---- field program (height-field materials) ----
@@ -393,13 +402,16 @@ void main(){
   vec3 N = normalize(vN); if(!gl_FrontFacing) N = -N;
   vec3 V = normalize(uEye - vW);
   float c = vM0.x, j = vM0.y, crust = vM0.z, s = vM0.w, A = vM1.x;
-  vec3 creamC = vec3(0.90, 0.84, 0.70);
-  vec3 baseC = uBaseKind < 0.5 ? vec3(0.86,0.87,0.88) : (uBaseKind < 1.5 ? vec3(0.62,0.70,0.42) : (uBaseKind < 2.5 ? vec3(0.9,0.9,0.89) : vec3(0.92,0.66,0.67)));
+  vec3 creamC = vec3(0.90, 0.80, 0.60);
+  vec3 baseC = uBaseKind < 0.5 ? vec3(0.86,0.88,0.90) : (uBaseKind < 1.5 ? vec3(0.42,0.53,0.18) : (uBaseKind < 2.5 ? vec3(0.50,0.53,0.56) : vec3(0.84,0.50,0.49)));
   // cream ridges (piped star-tip streaks)
   float ph = s * 6.2832 / uRidgeL;
   float rid = cos(ph) * A * smoothstep(0.02, 0.18, c);
+#ifdef HAS_DERIV
+  rid *= 1.0 - smoothstep(0.9, 2.2, fwidth(ph));
+#endif
   float det = texture2D(uDetA, vL.xz*0.8).r - 0.5;
-  float hgt = rid*0.07 + det*0.012*smoothstep(0.0,0.1,c);
+  float hgt = rid*0.045 + det*0.012*smoothstep(0.0,0.1,c);
   vec3 Nb = bumpN(N, vW, hgt, 1.0);
   float cm = smoothstep(0.0, 0.05, c);
   vec3 under = mix(baseC, creamC, cm);
@@ -411,14 +423,16 @@ void main(){
   Nb = bumpN(Nb, vW, spk*0.5, 0.03);
   // jam on top: glossy translucent gel, colour by thickness
   float jt = smoothstep(0.004, 0.03, j);
-  vec3 jamC = mix(vec3(0.66, 0.025, 0.04), vec3(0.24, 0.003, 0.009), smoothstep(0.02, 0.24, j));
+  vec3 jamC = mix(vec3(0.62, 0.05, 0.07), vec3(0.28, 0.008, 0.02), smoothstep(0.03, 0.26, j));
   float seeds = smoothstep(0.93, 0.97, vn(vL.xz*16.0)) * smoothstep(0.06, 0.12, j);
-  jamC = mix(jamC, vec3(0.62, 0.36, 0.10), seeds*0.45);
+  float bits = smoothstep(0.66, 0.78, vn(vL.xz*3.2 + 11.0)) * smoothstep(0.05, 0.1, j);
+  jamC = mix(jamC, vec3(0.62, 0.36, 0.10), seeds*0.4);
+  jamC = mix(jamC, vec3(0.72, 0.08, 0.10), bits*0.55);
   vec3 alb = mix(under, jamC, jt);
   float jamTop = jt;
   vec3 Nf = normalize(mix(Nb, N, jamTop*0.9));
-  float rough = mix(mix(0.5, 0.8, spk), 0.05, jamTop);
-  float spec = mix(0.035, 0.05, jamTop);
+  float rough = mix(mix(0.38, 0.8, spk), 0.05, jamTop);
+  float spec = mix(0.045, 0.05, jamTop);
   float wrap = mix(0.55, 0.3, jamTop);
   float ao = vM1.w;
   float sh = shadowAt(vW, Nf);
@@ -699,14 +713,18 @@ function shellMeshes(seed, chip) {
   return { dome: md.mesh(), foot: mf.mesh(), face: mc.mesh() };
 }
 
-// star nozzle (local: tip at origin pointing -y, length L)
+// long filling nozzle (local: tip at origin pointing -y, length NOZ_L): thin steel tube, star (cream) or round (jam) tip, flared coupler
+const NOZ_L = 3.0;
 function nozzleMesh(star) {
-  const mb = new MB(); const L = 1.15;
-  paramSurface(mb, star ? 64 : 32, 10, (u, v) => {
+  const mb = new MB(); const L = NOZ_L;
+  paramSurface(mb, star ? 48 : 28, 18, (u, v) => {
     const th = u * TAU; const y = v * L; // v=0 tip
-    let r = lerp(0.16, 0.62, Math.pow(v, 1.1));
-    if (star) r *= 1 + 0.16 * Math.max(0, Math.cos(th * 8)) * (1 - v * 0.6);
-    if (v > 0.92) r = 0.66;
+    let r;
+    if (v < 0.07) { r = lerp(0.15, 0.2, v / 0.07); if (star) r *= 1 + 0.2 * Math.max(0, Math.cos(th * 8)); }
+    else if (v < 0.1) r = lerp(0.2, 0.13, (v - 0.07) / 0.03);
+    else if (v < 0.8) r = 0.13;
+    else if (v < 0.95) r = lerp(0.13, 0.5, smooth(0.8, 0.95, v));
+    else r = 0.52;
     return [Math.cos(th) * r, y, Math.sin(th) * r];
   }, (u, v) => [u, v], true, false);
   return mb.mesh();
@@ -746,7 +764,7 @@ function strawberryMesh(seed) {
 }
 
 // capsule (tapered) into builder: segment a->b radii ra rb
-function capsuleInto(mb, a, b, ra, rb, seg, uvy) {
+function capsuleInto(mb, a, b, ra, rb, seg, uvy, star) {
   seg = seg || 10;
   const ax = V3.sub(b, a); const L = V3.len(ax) || 1e-4; const d = V3.mul(ax, 1 / L);
   const up = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
@@ -764,8 +782,11 @@ function capsuleInto(mb, a, b, ra, rb, seg, uvy) {
     for (let s = 0; s <= seg; s++) {
       const t = s / seg * TAU, cs = Math.cos(t), sn = Math.sin(t);
       const rad = V3.add(V3.mul(u, cs), V3.mul(w, sn));
-      const p = V3.add(R.c, V3.mul(rad, Math.max(R.r, 0.0001)));
-      const nn = V3.norm(V3.add(V3.mul(rad, R.nr), V3.mul(d, R.nd)));
+      const sr = star ? 1 + star * Math.cos(t * 8) : 1;
+      const p = V3.add(R.c, V3.mul(rad, Math.max(R.r * sr, 0.0001)));
+      let nr = rad;
+      if (star) { const tg = V3.add(V3.mul(u, -sn), V3.mul(w, cs)); nr = V3.norm(V3.add(rad, V3.mul(tg, 8 * star * Math.sin(t * 8) / sr))); }
+      const nn = V3.norm(V3.add(V3.mul(nr, R.nr), V3.mul(d, R.nd)));
       mb.vert(p, nn, [s / seg, uvy || 0]);
     }
   }
@@ -843,8 +864,8 @@ const R_IN = R * 0.94;                   // inner face usable radius (material b
 
 // tuning (physical units: slopes, u^3/s)
 const Q_CREAM = 0.56, Q_JAM = 0.6;
-const J_SLOPE = 0.03;                    // jam yield slope
-const J_FILM_F = 0.028, J_FILM_T = 0.085, J_FILM_P = 0.06;
+const J_SLOPE = 0.04;                    // jam yield slope
+const J_FILM_F = 0.03, J_FILM_T = 0.085, J_FILM_P = 0.06;
 const C_SLOPE = 1.6;                     // cream holds slopes up to this
 const CREAM_WALL = 0.11;
 const NBINS = 72;
@@ -1107,7 +1128,7 @@ const TNX = Math.round((TRAY.x1 - TRAY.x0) / TCELL), TNZ = Math.round((TRAY.z1 -
 const PN = 92, PCELL = (2 * (PLATE0.r + 0.07)) / PN;
 const RING_R = 2.36;
 const STORE_KEY = 'munyu-macaron-crumbs-v1';
-const V_POOL = 0.85, V_OPEN = 0.9, V_BOUQUET = 2.6;
+const V_POOL = 0.85, V_OPEN = 0.6, V_BOUQUET = 2.6;
 const TILT_MAX = 0.16, PIECE_TILT = 0.085;
 // plate slots for the opened shells (plate-local), asymmetric so the two never read as a face
 const SLOT_A = { x: -0.55, z: 2.75, yaw: 0.45, rx: 0.05 };   // bottom shell (pattern up)
@@ -1158,6 +1179,8 @@ function setupF() {
     const k = F.idx(i, j), x = F.cx(i), z = F.cz(j), r = Math.hypot(x, z);
     F.ang[k] = angWrap(Math.atan2(z, x)); F.rad[k] = r;
     F.W[k] = r <= R_IN ? 0 : (r <= R_IN + 0.24 ? 3 : 1);
+    // outside the ring line jam heads straight for the rim (it runs out of an opening instead of wrapping around)
+    const dr = F.jy * 1.7 * smooth(1.1, 2.3, r); F.G[k * 2] = r > 0 ? x / r * dr : 0; F.G[k * 2 + 1] = r > 0 ? z / r * dr : 0;
   }
   F.film = J_FILM_F; F.box = [0, FN - 1, 0, FN - 1]; F.fullDirty = true;
   return F;
@@ -1180,6 +1203,7 @@ function setupP() {
     const k = P.idx(i, j), x = P.cx(i), z = P.cz(j), r = Math.hypot(x, z);
     P.W[k] = r < PLATE0.r * 0.985 ? 0 : 1; P.B[k] = plateHeightAt(Math.min(r, PLATE0.r), PLATE0.r);
   }
+  P.B0 = P.B.slice(); // plate-only base (empty cells sink to it so nothing walls off around the shells)
   P.film = J_FILM_P; P.fullDirty = true;
   return P;
 }
@@ -1282,7 +1306,7 @@ function newRound(first) {
   setTrayDrive();
   G.P = setupP();
   const land = CAM.mode === 'land';
-  G.ring = { th0: (land ? 2.3 : 3.75) + (RNG() - 0.5) * 0.4, prog: 0, closed: false };
+  G.ring = { th0: (land ? 0.8 : 2.6) + (RNG() - 0.5) * 0.4, prog: 0, closed: false }; // start next to the cream bag so its neck never covers the ring start
   G.side = { angle: 0, held: 0, mode: 'gap', cradleA: null };
   G.jamPort = angWrap((land ? 3.25 : 4.62) + (RNG() - 0.5) * 0.12);
   const chipA = (RNG() - 0.5) * 0.6; // chip always faces the plate (+/- 17 deg)
@@ -1453,7 +1477,7 @@ function actPlaceTop() {
         T0.yaw = lerp(startYaw, -T0.chip.a, u);
         H.goal = { kind: 'claw', at: V3.add(T0.pos, [0, SHELL_THICK + 0.5, 0]) };
       } else {
-        if (T0.state === 'carry') { T0.state = 'on'; T0.yaw = -T0.chip.a; T0.chipWorld = angWrap(T0.chip.a); fitTop(); T0.vis = T0.plane.slice(); T0.vis[0] += 1.8; T0.visV = [0, 0, 0]; sfx.land(); }
+        if (T0.state === 'carry') { T0.state = 'on'; T0.yaw = -T0.chip.a; T0.chipWorld = angWrap(T0.chip.a); T0.fitInit = false; fitTop(); T0.vis = T0.plane.slice(); T0.vis[0] += 1.8; T0.visV = [0, 0, 0]; sfx.land(); }
         T0.pressDown = t < 1.3 ? 0 : (t < 1.7 ? smooth(1.3, 1.45, t) : 1 - smooth(1.7, 1.9, t));
         H.goal = { kind: 'flat', at: fLocalToWorld(0, 0, T0.vis[0] + SHELL_THICK + 0.2) };
         if (T0.pressDown > 0.5 && !pressed) { pressed = true; sfx.press(); }
@@ -1573,6 +1597,10 @@ function fitTop() {
   const H = supportHeights(G.F, off); for (let k = 0; k < H.length; k++) H[k] = Math.min(H[k], 1.15);
   const p = fitPlane(H, TILT_MAX);
   p[0] = clamp(p[0], 0.06, 0.7);
+  // the shell settles gradually: support "grows" under it rather than snapping
+  const o = G.top.plane, init = G.top.fitInit;
+  if (init) { p[0] = o[0] + clamp(p[0] - o[0], -0.05, 0.035); p[1] = o[1] + clamp(p[1] - o[1], -0.01, 0.01); p[2] = o[2] + clamp(p[2] - o[2], -0.01, 0.01); }
+  G.top.fitInit = true;
   G.top.plane = p;
 }
 function ceilArray() {
@@ -1592,7 +1620,7 @@ function updateTop(dt) {
   const T0 = G.top; if (!T0) return;
   if (T0.state === 'on') {
     G.fitTick = (G.fitTick || 0) + 1;
-    if (G.planeDirty || G.fitTick % 6 === 0) { const prev = Math.hypot(T0.plane[1], T0.plane[2]); fitTop(); G.planeDirty = false; const now = Math.hypot(T0.plane[1], T0.plane[2]); if (now > prev + 0.015) sfx.creak(now); }
+    if ((G.planeDirty && G.fitTick % 3 === 0) || G.fitTick % 6 === 0) { const prev = Math.hypot(T0.plane[1], T0.plane[2]); fitTop(); G.planeDirty = false; const now = Math.hypot(T0.plane[1], T0.plane[2]); if (now > prev + 0.015) sfx.creak(now); }
     for (let q = 0; q < 3; q++) { const r = spring(T0.vis[q], T0.visV[q], q === 0 ? Math.max(Math.min(T0.plane[0], 0.12), T0.plane[0] - (T0.pressDown || 0) * 0.3) : T0.plane[q], 300, 17, dt); T0.vis[q] = r[0]; T0.visV[q] = r[1]; }
   }
 }
@@ -1688,7 +1716,7 @@ function updateRopes(dt) {
     const aheadH = g.B[k] + g.C[k] + g.U[k];
     if (g.K[k] > 0.5 && g.C[k] > h.r * 0.6) { h.stuck = true; if (h.chip) G.splitEv += 1; continue; }        // bank ahead
     if (aheadH - myH > h.r * 1.3) { branch(h, 0.9); if (h.chip) G.splitEv += 1; continue; }                    // too tall: split
-    if (g.C[k] > 0.15 && h.chip) { G.splitEv += 0.05; G.stackEv = (G.stackEv || 0) + 1; }                  // climbing over cream: stacks
+    if (g.C[k] > 0.15 && h.chip) { G.splitEv += 0.08; G.stackEv = (G.stackEv || 0) + 1; }                  // climbing over cream: stacks
     const cr = stampSeg(g, h.x, h.z, nx, nz, h.r, vol, h.s, onCrust);
     if (cr < 0) { branch(h, 0.9); continue; }
     if (cr > 0) h.stuck = true;                                     // crumbs grabbed the tip: a low bank forms here
@@ -1825,13 +1853,13 @@ function ringClosedFlood() { // flood from the centre through cells without a cr
 function evalDiscoveries() {
   if (G.phase === 'A') {
     if (!G.ring.closed && G.ring.prog > TAU * 0.7 && ringClosedFlood()) { G.ring.closed = true; sfx.milestone('ring'); logEv('ringClosed', { prog: +(G.ring.prog / TAU).toFixed(2) }); glint(fLocalToWorld(Math.cos(G.ring.th0) * RING_R, Math.sin(G.ring.th0) * RING_R, 0.5), 'ring'); }
-    if (!G.ring.closed && G.leakVol > 0.08) flag('d1a', fLocalToWorld(0, 0, 0.3));
+    if (!G.ring.closed && G.leakVol > 0.04) flag('d1a', fLocalToWorld(0, 0, 0.3));
     if (G.ring.closed && G.disc.d1a && G.stats.jamAfterClose > 0.3 && G.time - G.leakT > 1.0 && jamInsideRing() > 0.6) flag('d1b', fLocalToWorld(0, 0, 0.5));
   }
   if (G.bandVol > 0.03) flag('d2a', topWorldPos());
   if (G.stats.placeT && G.phase === 'B' && G.time - G.stats.placeT > 2.0 && G.bandVol < 0.015 && jamInsideRing() > 0.35) flag('d2b', topWorldPos());
   if (G.crustCount >= 8) flag('d4a', null);
-  if (G.jamBank > 8) flag('d4b', null);
+  if (G.jamBank > 4) flag('d4b', null);
   if (G.chipVol > 0.18) flag('d5a', [MAC.x + Math.cos(G.top.chipWorld) * (R + 0.3), faceY() + 0.3, MAC.z + Math.sin(G.top.chipWorld) * (R + 0.3)]);
   if (G.splitEv > 1.5 && G.disc.d5a) flag('d5c', null);
   if (G.phase === 'D') {
@@ -1853,7 +1881,7 @@ function scanJamBank() {
     if ((T.K[k + 1] > 0.5 && T.C[k + 1] > 0.18) || (T.K[k - 1] > 0.5 && T.C[k - 1] > 0.18) || (T.K[k + nx] > 0.5 && T.C[k + nx] > 0.18) || (T.K[k - nx] > 0.5 && T.C[k - nx] > 0.18)) n++;
   }
   G.jamBank = n;
-  if (n > 8 && !G.disc.d4b) { for (let j = b[2] + 1; j < b[3]; j++) for (let i = b[0] + 1; i < b[1]; i++) { const k = j * nx + i; if (T.J[k] > 0.07 && T.K[k + 1] + T.K[k - 1] + T.K[k + nx] + T.K[k - nx] > 0.5) { flag('d4b', [T.cx(i), TRAY.h + 0.3, T.cz(j)]); return; } } }
+  if (n > 4 && !G.disc.d4b) { for (let j = b[2] + 1; j < b[3]; j++) for (let i = b[0] + 1; i < b[1]; i++) { const k = j * nx + i; if (T.J[k] > 0.07 && T.K[k + 1] + T.K[k - 1] + T.K[k + nx] + T.K[k - nx] > 0.5) { flag('d4b', [T.cx(i), TRAY.h + 0.3, T.cz(j)]); return; } } }
 }
 
 // ---------- invite: exactly one highlighted bag ----------
@@ -1893,17 +1921,17 @@ const LAYOUTS = {
     bag: [[8.8, 1.6, 15.8], [-18.4, 1.6, 11.2]],          // [cream, jam] back-end (twisted top) positions
     display: [[-8.4, 0, -12.6], [-2.0, 0, -12.9]],
     sample: [10.4, 0, -12.4],
-    wallD: 15.5,
-    fit: [[-14.4, 0, -10.4], [14.9, 0, -10.4], [-14.4, 0, 8.4], [14.9, 0, 8.4], [10.4, 2.2, -12.8], [-8.4, 1.5, -13.8], [9, 6.5, -16.5]],
+    wallD: 15.5, oven: [16.5, 0, -16.8], ovenYaw: -0.32,
+    fit: [[-14.4, 0, -10.4], [14.9, 0, -10.4], [-14.4, 0, 8.4], [14.9, 0, 8.4], [10.4, 2.2, -12.8], [-8.4, 1.5, -13.8], [13.5, 5.2, -16.0]],
     jamPort: 3.49,
   },
   port: {
     yaw: -Math.PI / 2, pitch: 0.96, fovH: 0.62, fovV: null,
-    bag: [[-23.0, 1.6, 5.8], [-23.0, 1.6, -5.2]],
+    bag: [[-22.6, 1.6, 7.0], [-22.6, 1.6, -6.8]],
     display: [[16.9, 0, -6.2], [17.1, 0, -0.6]],
     sample: [16.8, 0, 5.4],
-    wallD: 19.5,
-    fit: [[-14.4, 0, -10.4], [14.9, 0, -10.4], [-14.4, 0, 8.4], [14.9, 0, 8.4], [16.8, 2.2, 6.0], [17.0, 1.6, -7.0], [19.8, 6.5, 0]],
+    wallD: 19.5, oven: [20.6, 0, 9.6], ovenYaw: -Math.PI / 2 - 0.35,
+    fit: [[-14.4, 0, -10.4], [14.9, 0, -10.4], [-14.4, 0, 8.4], [14.9, 0, 8.4], [16.8, 2.2, 6.0], [17.0, 1.6, -7.0], [19.6, 5.0, 7.4]],
     jamPort: 4.62,
   },
 };
@@ -1978,11 +2006,11 @@ void main(){ vec2 uv = vec2(mix(uCrop.x, uCrop.z, vUV.x), mix(uCrop.y, uCrop.w, 
 
 const RS = { ready: false, tex: {}, mesh: {}, field: {}, dyn: {}, scale: 1, frameMs: 16, lowCount: 0 };
 const COL = {
-  steel: lin('#c9ced3'), enamel: lin('#f3f4f2'), porcelain: lin('#f6f5f1'), pist: lin('#b9c98f'), rose: lin('#efc3c4'),
-  pistIn: lin('#c2d08e'), roseIn: lin('#f0c9c7'), glove: lin('#f2f4f6'), sleeve: lin('#dfe4e9'), nozzle: lin('#d8dce0'),
-  cream: lin('#f1e6cc'), jam: lin('#a6111f'), jamBag: lin('#b81d30'),
+  steel: lin('#c9ced3'), enamel: lin('#f2f5f7'), porcelain: lin('#f6f5f1'), pist: lin('#b9c98f'), rose: lin('#efc3c4'),
+  pistIn: lin('#aebf72'), roseIn: lin('#eebcba'), glove: lin('#f2f4f6'), sleeve: lin('#dfe4e9'), nozzle: lin('#d8dce0'),
+  cream: lin('#f2deb6'), platter: lin('#b9bfc5'), jam: lin('#a6111f'), jamBag: lin('#b81d30'),
 };
-const LIGHT = { dir: V3.norm([-0.45, 0.78, -0.42]), col: [1.95, 2.05, 2.2], sky: [0.40, 0.45, 0.52], ground: [0.30, 0.29, 0.28] };
+const LIGHT = { dir: V3.norm([-0.45, 0.78, -0.42]), col: [2.15, 2.25, 2.42], sky: [0.30, 0.34, 0.40], ground: [0.22, 0.21, 0.20] };
 
 function loadTex(name, src, repeat, fallback) {
   RS.tex[name] = fallback ? texFromImage(fallback, repeat) : null;
@@ -2019,6 +2047,7 @@ function initGL() {
   M.quad = quadXZ();
   M.wall = (function () { const mb = new MB(); const a = mb.vert([-1, 0, 0], [0, 0, 1], [0, 1]), b = mb.vert([1, 0, 0], [0, 0, 1], [1, 1]), c = mb.vert([1, 1, 0], [0, 0, 1], [1, 0]), d = mb.vert([-1, 1, 0], [0, 0, 1], [0, 0]); mb.quad(a, b, c, d); return mb.mesh(); })();
   M.berry = [strawberryMesh(11), strawberryMesh(23), strawberryMesh(37)];
+  M.ovenBody = boxMesh(9.0, 7.4, 6.0); M.ovenDoor = boxMesh(7.2, 4.0, 0.25); M.ovenGlass = boxMesh(5.6, 2.5, 0.1); M.ovenBar = boxMesh(6.2, 0.28, 0.35); M.ovenPanel = boxMesh(9.0, 1.3, 0.2);
   M.sampleFill = (function () { const mb = new MB(); const prof = []; for (let k = 0; k <= 14; k++) { const a = k / 14 * TAU; prof.push([2.45 + Math.cos(a) * 0.42, 0.42 + Math.sin(a) * 0.42]); } paramSurface(mb, 64, 14, (u, v) => { const k = Math.round(v * 14); const th = u * TAU; const rr = prof[k][0] + 0.06 * Math.cos(th * 18); return [Math.cos(th) * rr, prof[k][1], Math.sin(th) * rr]; }, null, true, true); return mb.mesh(); })();
   M.sampleJam = (function () { const mb = new MB(); lathe(mb, [[0, 0.62], [1.2, 0.6], [1.9, 0.5], [2.1, 0.3], [2.0, 0.05], [0, 0.05]], 48); return mb.mesh(); })();
   // field meshes
@@ -2054,9 +2083,10 @@ function fillField(g, buf, mode, rows) {
   const Hh = fillField.H && fillField.H.length >= g.N ? fillField.H : (fillField.H = new Float32Array(Math.max(g.N, TNX * TNZ)));
   const jj0 = Math.max(0, j0 - 1), jj1 = Math.min(nz - 1, j1 + 1);
   const sign = mode === 'TP' ? -1 : 1;
+  const B0 = g.B0 || B;
   for (let j = jj0; j <= jj1; j++) for (let i = 0; i < nx; i++) {
     const k = j * nx + i; const m = C[k] + U[k] + J[k];
-    const base = mode === 'P' ? B[k] : 0;
+    const base = mode === 'P' ? (m > 0.006 ? B[k] : B0[k]) : 0;
     Hh[k] = base + sign * (m > 0.006 ? m + 0.004 : -0.05);
   }
   const c2 = 2 * g.cell;
@@ -2069,7 +2099,11 @@ function fillField(g, buf, mode, rows) {
     const nl = 1 / Math.hypot(nX, nY, nZ);
     buf[o] = g.cx(i); buf[o + 1] = h + (mode === 'T' ? TRAY.h : 0); buf[o + 2] = g.cz(j);
     buf[o + 3] = nX * nl; buf[o + 4] = nY * nl; buf[o + 5] = nZ * nl;
-    buf[o + 6] = C[k]; buf[o + 7] = J[k] + (C[k] < 0.05 ? U[k] : 0); buf[o + 8] = g.K[k]; buf[o + 9] = g.S[k];
+    // jam colour from a 3x3 blur so pools don't stair-step along cells
+    let jb = 0, jn = 0;
+    for (let dj = -1; dj <= 1; dj++) { const jj = j + dj; if (jj < 0 || jj >= nz) continue; for (let di = -1; di <= 1; di++) { const ii = i + di; if (ii < 0 || ii >= nx) continue; const kk = jj * nx + ii; jb += J[kk] + (C[kk] < 0.05 ? U[kk] : 0); jn++; } }
+    jb /= jn;
+    buf[o + 6] = C[k]; buf[o + 7] = jb; buf[o + 8] = g.K[k]; buf[o + 9] = g.S[k];
     const avg = (hx0 + hx1 + hz0 + hz1) * 0.25;
     const ao = 1 - clamp((avg - h) * sign * 2.2, 0, 0.38);
     buf[o + 10] = g.A[k]; buf[o + 11] = 0; buf[o + 12] = m > 0.006 ? 1 : 0; buf[o + 13] = ao;
@@ -2101,7 +2135,7 @@ function setCommon(p) {
   if (u.uLightVP) gl.uniformMatrix4fv(u.uLightVP, false, lightVP);
   if (u.uShadowTexel) gl.uniform1f(u.uShadowTexel, 1 / SHADOW_SIZE);
   if (u.uWinDir) gl.uniform3fv(u.uWinDir, RS.winDir);
-  if (u.uExposure) gl.uniform1f(u.uExposure, 1.0);
+  if (u.uExposure) gl.uniform1f(u.uExposure, 0.9);
   if (u.uEnvYaw) gl.uniform1f(u.uEnvYaw, CAM.yaw);
   const bindT = (name, unit, tex) => { if (u[name] != null) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(u[name], unit); } };
   bindT('uShadow', 0, shadowTex); bindT('uEnv', 1, RS.tex.env); bindT('uDetA', 2, RS.tex.detA); bindT('uDetB', 3, RS.tex.detB); bindT('uDetC', 4, RS.tex.detC);
@@ -2114,7 +2148,7 @@ function drawLit(mesh, model, m) {
   gl.uniformMatrix4fv(u.uModel, false, model); gl.uniformMatrix3fv(u.uNMat, false, M4.normalMat(model));
   gl.uniform3fv(u.uColor, m.color || MAT0.color); gl.uniform1f(u.uRough, m.rough != null ? m.rough : 0.5); gl.uniform1f(u.uSpec, m.spec != null ? m.spec : 0.04);
   gl.uniform1f(u.uMetal, m.metal || 0); gl.uniform1f(u.uMat, m.mat || 0); gl.uniform1f(u.uAlpha, m.alpha != null ? m.alpha : 1);
-  gl.uniform1f(u.uGlow, m.glow || 0); gl.uniform1f(u.uFill, m.fill || 0); gl.uniform3fv(u.uTint, m.tint || MAT0.tint);
+  gl.uniform1f(u.uGlow, m.glow || 0); gl.uniform1f(u.uFill, m.fill || 0); gl.uniform3fv(u.uTint, m.tint || MAT0.tint); gl.uniform1f(u.uHaze, m.haze || 0);
   bindMesh(mesh, p); gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
 function drawField(mesh, model, baseKind) {
@@ -2186,9 +2220,9 @@ function buildBagMesh(b) {
   const L = layoutPts(); const id = b.id;
   const P0 = L.bag[id].slice();
   const ax = b.axis || [0, -1, 0];
-  const P3 = V3.sub(b.tip, V3.mul(ax, 1.2));
+  const P3 = V3.sub(b.tip, V3.mul(ax, NOZ_L + 0.04));
   const up = [0, 1, 0];
-  const P2 = V3.add(V3.sub(P3, V3.mul(ax, 1.5)), [0, 0.15, 0]);
+  const P2 = V3.add(V3.sub(P3, V3.mul(ax, 1.2)), [0, 0.15, 0]);
   const hop = (b.hop || 0) + (b.bounce || 0) * 0.25;
   P0[1] += hop;
   const P1 = V3.add(V3.lerp(P0, P2, 0.5), [0, 0.5 + hop * 0.8, 0]);
@@ -2280,10 +2314,10 @@ function buildHand(h) {
   const back = viewBack(); const side = viewRight();
   const fdir = V3.norm(V3.add(V3.mul(back, 0.22), V3.add([0, 0.34, 0], V3.mul(side, -0.92 * sg))));
   const e0 = at(0, 0, -0.45), e1 = V3.add(e0, V3.mul(fdir, 3.2 * HS));
-  capsuleInto(mb, e0, e1, 0.31 * HS, 0.4 * HS, 12);
+  capsuleInto(mb, e0, e1, 0.27 * HS, 0.33 * HS, 12);
   const s0 = V3.add(e0, V3.mul(fdir, 1.25 * HS)), s1 = V3.add(e0, V3.mul(fdir, 5 * HS));
-  capsuleInto(ms, s0, s1, 0.4 * HS, 0.5 * HS, 14);
-  capsuleInto(ms, V3.add(s0, V3.mul(fdir, -0.1 * HS)), V3.add(s0, V3.mul(fdir, 0.25 * HS)), 0.43 * HS, 0.43 * HS, 14);
+  capsuleInto(ms, s0, s1, 0.34 * HS, 0.42 * HS, 14);
+  capsuleInto(ms, V3.add(s0, V3.mul(fdir, -0.1 * HS)), V3.add(s0, V3.mul(fdir, 0.22 * HS)), 0.37 * HS, 0.37 * HS, 14);
   updateMesh(RS.dyn.hand[h.id], new Float32Array(mb.v), new Uint16Array(mb.i));
   updateMesh(RS.dyn.sleeve[h.id], new Float32Array(ms.v), new Uint16Array(ms.i));
 }
@@ -2360,7 +2394,7 @@ function buildLips() {
       if (h.g === 'P' && !h.child) { const pl = G.plate; e[1] = pl.y + 1.0; }
       const mid = [lerp(s0[0], e[0], 0.55), Math.max(y0, e[1]) + 0.12, lerp(s0[2], e[2], 0.55)];
       const N = 6; let prev = s0;
-      for (let q = 1; q <= N; q++) { const t = q / N; const u = 1 - t; const p = [u * u * s0[0] + 2 * u * t * mid[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * mid[1] + t * t * e[1], u * u * s0[2] + 2 * u * t * mid[2] + t * t * e[2]]; capsuleInto(mc, prev, p, 0.36, 0.36, 10); prev = p; }
+      for (let q = 1; q <= N; q++) { const t = q / N; const u = 1 - t; const p = [u * u * s0[0] + 2 * u * t * mid[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * mid[1] + t * t * e[1], u * u * s0[2] + 2 * u * t * mid[2] + t * t * e[2]]; capsuleInto(mc, prev, p, 0.36, 0.36, 24, 0, 0.13); prev = p; }
     }
   }
   updateMesh(RS.dyn.lipC, new Float32Array(mc.v), new Uint16Array(mc.i));
@@ -2460,7 +2494,7 @@ function drawScene() {
   // plate
   if (!G.plate.hidden) {
     const pl = G.plate; const px = pl.x + (pl.onTray ? sh : 0);
-    drawLit(M.plate, M4.trs([px, pl.y, pl.z], wigRot('plate') * 0.3, 0, 0, pl.scale), { mat: 3, color: COL.porcelain, rough: 0.32, spec: 0.04, glow: (pl.glow || 0) * 0.35 });
+    drawLit(M.plate, M4.trs([px, pl.y, pl.z], wigRot('plate') * 0.3, 0, 0, pl.scale), { mat: 15, color: COL.platter, rough: 0.3, spec: 0.5, metal: 0.9, glow: (pl.glow || 0) * 0.35 });
     drawField(RS.field.P, M4.trs([px, pl.y, pl.z], 0, 0, 0, pl.scale), 2);
   }
   // shells
@@ -2492,10 +2526,20 @@ function drawScene() {
     drawLit(M.sampleJam, M4.trs(base, 0, 0, wr, sc), { mat: 14, color: COL.jam, rough: 0.08, spec: 0.05 });
     drawShell(M.shellTopPlain, M4.trs([base[0], base[1] + 0.84 * sc, base[2]], 0.05, 1.2, wr + 0.04, sc), COL.rose, COL.roseIn, 0);
   }
+  // oven at the back (stainless, glass door with a warm glow inside)
+  {
+    const o = L.oven; const yw = L.ovenYaw; const base = M4.trs([o[0], 0, o[2]], 0, yw, 0, 1);
+    const at = (x, y, z) => M4.mul(base, M4.trs([x, y, z], 0, 0, 0, 1));
+    drawLit(M.ovenBody, at(0, 0, 0), { mat: 1, color: COL.steel, rough: 0.35, spec: 0.5, metal: 0.85, haze: 0.32 });
+    drawLit(M.ovenPanel, at(0, 6.0, 3.0), { mat: 0, color: [0.12, 0.13, 0.14], rough: 0.25, spec: 0.3, haze: 0.32 });
+    drawLit(M.ovenDoor, at(0, 1.1, 3.0), { mat: 1, color: COL.steel, rough: 0.3, spec: 0.5, metal: 0.85, haze: 0.32 });
+    drawLit(M.ovenGlass, at(0, 1.85, 3.2), { mat: 0, color: [0.05, 0.04, 0.035], rough: 0.06, spec: 0.08, glow: 0.55, haze: 0.22 });
+    drawLit(M.ovenBar, at(0, 4.55, 3.35), { mat: 10, color: COL.nozzle, rough: 0.2, spec: 0.6, metal: 1, haze: 0.32 });
+  }
   // works on display
   G.works.forEach((w, wi) => {
     const pl = w.plate; const pp = [pl.x, pl.y, pl.z];
-    drawLit(M.plate, M4.trs(pp, 0, 0, wigRot('work' + wi) * 0.3, pl.s), { mat: 3, color: COL.porcelain, rough: 0.1, spec: 0.05 });
+    drawLit(M.plate, M4.trs(pp, 0, 0, wigRot('work' + wi) * 0.3, pl.s), { mat: 15, color: COL.platter, rough: 0.3, spec: 0.5, metal: 0.9 });
     drawField(w.meshes.P, M4.trs(pp, 0, 0, 0, pl.s), 2);
     const wl = (x, z, h) => [pl.x + x * pl.s, pl.y + h * pl.s, pl.z + z * pl.s];
     const aPos = wl(SLOT_A.x, SLOT_A.z, plateHeightAt(Math.hypot(SLOT_A.x, SLOT_A.z), pl.r) + SHELL_THICK), bPos = wl(SLOT_B.x, SLOT_B.z, plateHeightAt(Math.hypot(SLOT_B.x, SLOT_B.z), pl.r) + SHELL_THICK);
@@ -2828,10 +2872,10 @@ function updateNozzles(dt) {
       axis = V3.norm(V3.add(V3.mul(V3.norm(V3.sub([MAC.x, 0, MAC.z], bagBack)), 1), [0, -0.5, 0]));
     } else {
       goal = tg.w.slice();
-      if (tg.side) { const inw = [tg.inward[0], 0, tg.inward[1]]; axis = V3.norm(V3.add(V3.mul(inw, 0.85), [0, -0.42, 0])); if (!b.pressing) goal = V3.add(goal, V3.add(V3.mul(inw, -0.5), [0, 0.45, 0])); }
+      if (tg.side) { const inw = [tg.inward[0], 0, tg.inward[1]]; axis = V3.norm(V3.add(V3.mul(inw, 0.9), [0, -0.3, 0])); if (!b.pressing) goal = V3.add(goal, V3.add(V3.mul(inw, -0.45), [0, 0.35, 0])); }
       else {
         const tb = V3.norm(V3.sub([bagBack[0], 0, bagBack[2]], [goal[0], 0, goal[2]]));
-        axis = V3.norm(V3.add([0, -1, 0], V3.mul(tb, -0.8)));
+        axis = V3.norm(V3.add([0, -1, 0], V3.mul(tb, -1.05)));
         if (!b.pressing) goal = V3.add(goal, [0, 0.55 + 0.08 * Math.sin(G.time * 1.7 + id), 0]);
       }
       if (b.pressing) goal = V3.add(goal, [0, -0.12, 0]);
@@ -2857,9 +2901,9 @@ function simulate(dt) {
       const plug = pressing ? nozzleTarget(G.press.bag).plug : null;
       const iters = (G.top.pressDown || 0) > 0 ? 6 : (pressing ? 3 : 2);
       if (pressing || (G.top.pressDown || 0) > 0 || (G.tick % 3 === 0)) squeeze(F, ceilArray(), iters, onExitF, plug);
-      for (let q = 0; q < 4; q++) flowJam(F, dt, false, onExitF, true);
+      for (let q = 0; q < 4; q++) flowJam(F, dt, true, onExitF, true);
     } else if (G.phase === 'A' || G.phase === 'PLACING') {
-      for (let q = 0; q < 5; q++) flowJam(F, dt, false, onExitF, true);
+      for (let q = 0; q < 5; q++) flowJam(F, dt, true, onExitF, true);
       if (G.tick % 2 === 0) flowCream(F, dt, onExitF);
     }
     updateLips(dt);
@@ -2978,7 +3022,7 @@ function boot() {
   if (gl) {
     initGL();
     cv.addEventListener('webglcontextlost', e => { e.preventDefault(); RS.ready = false; stop(); }, false);
-    cv.addEventListener('webglcontextrestored', () => { try { initGL(); G.T.fullDirty = true; G.P.fullDirty = true; } catch (e) { } start(); }, false);
+    cv.addEventListener('webglcontextrestored', () => { try { G.works = []; initGL(); G.T.fullDirty = true; G.P.fullDirty = true; G.F.fullDirty = true; G.TP.fullDirty = true; RS.shadowOnce = false; } catch (e) { } start(); }, false);
   }
   bindInput();
   G.lastInput = 0;
