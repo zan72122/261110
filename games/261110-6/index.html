@@ -380,7 +380,7 @@ function drawImgOn(surf,mapW,img,R,alpha,op,clip){
 }
 // paint an image onto the stack under a station (top paper with holes + lower layer)
 // returns {top:bool, under:bool(through hole or direct)}
-function paintStack(stack,img,C,upDeg,w,h,alpha,phi){
+function paintStack(stack,img,C,upDeg,w,h,alpha,phi,noMeasure){
   const R=rectW(C,upDeg,w,h),res={top:false,under:false,hole:false};
   if(stack.top){
     const mt=mapper(stack.top,stack.mode,phi);
@@ -388,7 +388,7 @@ function paintStack(stack,img,C,upDeg,w,h,alpha,phi){
     // lower layer only through holes: test hole proximity
     const mu=mapper(stack.under,null,phi);
     let near=false;for(const hh of L.holes){const wp=topWorld(hh.u,hh.v,stack.mode,phi),d=Math.hypot(wp[0]-C[0],wp[1]-C[1]);if(d<hh.r+Math.max(w,h)*0.55)near=true;}
-    if(near){drawImgOn(stack.under,mu,img,R,alpha,null,(x)=>holeClip(x,mu,stack.mode,phi,stack.under.k,0));res.under=true;res.holeInk=holeInkFrac(img,R,stack.mode,phi);res.hole=res.holeInk>0.04;}
+    if(near){drawImgOn(stack.under,mu,img,R,alpha,null,(x)=>holeClip(x,mu,stack.mode,phi,stack.under.k,0));res.under=true;if(!noMeasure){res.holeInk=holeInkFrac(img,R,stack.mode,phi);res.hole=res.holeInk>0.04;}}
   }else{
     const mu=mapper(stack.under,null,phi);drawImgOn(stack.under,mu,img,R,alpha);res.under=true;
   }
@@ -721,6 +721,7 @@ function glInit(){
     TX.mask=MASKS.map(c=>texFrom(c,false,true));TX.sampleF=texFrom(IMG.sampleF,false,true);TX.sampleB=texFrom(IMG.sampleB,false,true);
     for(const k in SF){SF[k].tex=texFrom(SF[k].c,false,true);SF[k].dirty=false;}
     for(const m of memorials){m.texF=m.cf?texFrom(m.cf,false,true):null;m.texB=m.cb?texFrom(m.cb,false,true):null;}
+    try{for(const c of [st.cyc&&st.cyc.cap,st.fly&&st.fly.cap]){if(c&&c.m&&c.m.cf&&memorials.indexOf(c.m)<0){c.m.texF=texFrom(c.m.cf,false,true);c.m.texB=texFrom(c.m.cb,false,true);}}}catch(e){}
     sprBuf=gl.createBuffer();
     // shadow framebuffer
     SHA=null;
@@ -959,7 +960,7 @@ function stampDrag(s,station){
   const w=L.markH*0.62*(0.22+0.78*Math.abs(Math.cos(s.bandS*3.0+s.bandPh)));
   const ink=INK[s.type],col=(ink.a===ink.b||Math.sin(s.bandS*5)>0)?ink.a:ink.b;
   const alpha=clamp(s.ink,0.12,1)*0.85;
-  paintStack(stack,brushImg(col),C,bandUp,w,Math.max(step*3.2,0.07),alpha*0.62,st.phi);
+  paintStack(stack,brushImg(col),C,bandUp,w,Math.max(step*3.2,0.07),alpha*0.62,st.phi,true);
   s.ink=Math.max(0.14,s.ink-step*0.05);
   st.bandSnd=1;
 }
@@ -1029,7 +1030,7 @@ function complete(){
   const fp=flapPaperCenter();sparkle(fp[0],fp[1],fp[2],16,2.0);
   st.cyc.cap=captureMemorial();st.cyc.after=0;
   // drop the in-progress snapshot of this page and store the finished one right away
-  const wid='w'+st.cyc.id+'_'+(persist.plays||0);persist.memorials=persist.memorials.filter(q=>q.id!==wid);{const wi=memorials.findIndex(q=>q.id===wid);if(wi>=0)memorials.splice(wi,1);}
+  const wid='w'+st.cyc.id+'_'+(persist.plays||0);persist.memorials=persist.memorials.filter(q=>q.id!==wid);{const wi=memorials.findIndex(q=>q.id===wid);if(wi>=0)dropMemTex(memorials.splice(wi,1)[0]);}
   addMemorial(st.cyc.cap,null,false);
   st.busy=2.8;st.glowStand=1;
   const b0=st.beta;tlAdd(0.5,1.0,(u)=>{st.beta=lerp(b0,155,easeIO(u));});
@@ -1519,7 +1520,7 @@ function guideTarget(){
   if(!f.first)return {t:'ring',k:'r0'};
   const held=st.seats.some(s=>s.emerged&&s.band<=0.45&&(s.inP&&st.beta<6||s.inQ&&st.beta>=172))&&G.kind!=='ring';
   if(held&&!f.d2&&!st.unlocked)return {t:'paper',k:'pb'};
-  if(st.prints>=3&&f.userTurn<20)return {t:'paper',k:'p0'};
+  if(st.prints>=3&&f.userTurn<20&&!st.unlocked)return {t:'paper',k:'p0'};
   if(!st.unlocked)return {t:'ring',k:'r1'};
   if(!c.trans)return {t:'ring',k:'r2'};
   if(!c.raised)return {t:'book',k:'b0'};
@@ -1539,7 +1540,7 @@ function guideUpdate(dt){
   const g=guideTarget();st.guide=g;
   if(G.id!==null||!g){st.idle=0;}else st.idle+=dt;
   if(st.demo){st.demo.u+=dt/2.3;if(st.demo.u>=1||st.demo.kill){st.demo=null;clearOverlay();}}
-  else if(g&&st.idle>4&&!st.demoShown[g.k]){st.demoShown[g.k]=1;st.demo={u:0,t:g.t,path:demoPath(g.t)};}
+  else if(glOK&&g&&st.idle>4&&!st.demoShown[g.k]){st.demoShown[g.k]=1;st.demo={u:0,t:g.t,path:demoPath(g.t)};}
 }
 // ---- hand overlay (2D) ----
 let ovDirty=false;
@@ -1558,6 +1559,7 @@ function drawHand(x,y,sc,press,alpha){
   c.restore();
 }
 function overlayUpdate(){
+  if(!glOK){if(!ovDirty&&IMG.sampleF){const dpr=ov._dpr||1;ox.setTransform(dpr,0,0,dpr,0,0);ox.fillStyle='#3a2416';ox.fillRect(0,0,LAY.W,LAY.H);const r=Math.min(LAY.W,LAY.H)*0.32;ox.fillStyle='#efe5cf';ox.beginPath();ox.arc(LAY.W/2,LAY.H/2,r,0,TAU);ox.fill();ox.drawImage(IMG.sampleF,LAY.W/2-r,LAY.H/2-r,r*2,r*2);ovDirty=true;}return;}
   if(!st.demo){if(ovDirty)clearOverlay();return;}
   const d=st.demo,u=d.u,dpr=ov._dpr||1;ox.setTransform(dpr,0,0,dpr,0,0);ox.clearRect(0,0,ov.width/dpr,ov.height/dpr);ovDirty=true;
   const fadeIn=smooth(0,0.12,u),fadeOut=1-smooth(0.86,1,u),mv=smooth(0.18,0.84,u);
@@ -1604,7 +1606,7 @@ function update(dt){
     if(G.kind!=='book'&&st.bSettle!==null&&!st.bnudge){st.beta=lerp(st.beta,st.bSettle,Math.min(1,dt*7));if(Math.abs(st.beta-st.bSettle)<0.05){st.beta=st.bSettle;if(st.bSettle===80)SND.kotsun(1.05);st.bSettle=null;}}
   }else{st.pendBook=0;}
   if(prevBeta<50&&st.beta>=50&&st.unlocked&&!st.sendAside){
-    if(st.busy<=0){SND.whoosh();if(coverage(SF.topF)>0.004){setTimeout(()=>SND.stand(),180);st.cyc.raised=true;st.f.popup=true;
+    if(st.busy<=0){SND.whoosh();st.cyc.raised=true;if(coverage(SF.topF)>0.004){setTimeout(()=>SND.stand(),180);st.f.popup=true;
       const c=flapPaperCenter();sparkle(c[0],c[1]+0.5,c[2]+0.3,8,1.6,[1,0.95,0.8]);logEv('popup');}}}
   if(prevBeta>=6&&st.beta<6)SND.paper();
   prevBeta=st.beta;
@@ -1621,7 +1623,7 @@ function update(dt){
 // =====================================================================
 //  boot / loop / lifecycle
 // =====================================================================
-let running=false,rafId=0,lastT=0,perfAcc=0,perfN=0,perfCool=0;
+let running=false,rafId=0,lastT=0,perfAcc=0,perfN=0,perfCool=0,perfUpT=-99,perfBlock=0;
 function frame(ts){
   if(!running)return;
   rafId=requestAnimationFrame(frame);
@@ -1633,8 +1635,8 @@ function frame(ts){
   // adaptive resolution (keeps 60fps on older iPads)
   perfAcc+=dt;perfN++;perfCool-=dt;
   if(perfN>=60){const avg=perfAcc/perfN;perfAcc=0;perfN=0;
-    if(perfCool<=0){if(avg>0.021&&renderScale>0.6){renderScale=Math.max(0.6,renderScale-0.1);resize();perfCool=2;}
-      else if(avg<0.0145&&renderScale<1){renderScale=Math.min(1,renderScale+0.1);resize();perfCool=3;}}}
+    if(perfCool<=0){if(avg>0.022&&renderScale>0.6){if(st.t-perfUpT<4)perfBlock=st.t+40;renderScale=Math.max(0.6,renderScale-0.1);resize();perfCool=2;}
+      else if(avg<0.0178&&renderScale<1&&st.t>perfBlock){renderScale=Math.min(1,renderScale+0.1);resize();perfCool=5;perfUpT=st.t;}}}
 }
 function start(){if(running)return;running=true;lastT=0;rafId=requestAnimationFrame(frame);}
 function stop(){running=false;if(rafId)cancelAnimationFrame(rafId);rafId=0;}
