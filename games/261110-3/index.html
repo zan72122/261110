@@ -3900,8 +3900,9 @@ three/build/three.module.js:
     // bamboo display pole where take-home bags get hung (in front of curtain)
     lanterns: [
       // hanging 提灯 (centers). Main lights come from these.
-      { x: -0.56, y: 1.02, z: 0.1, r: 0.1, h: 0.2 },
-      { x: 0.56, y: 1.02, z: 0.1, r: 0.1, h: 0.2 },
+      { x: -0.4, y: 1.02, z: 0.1, r: 0.1, h: 0.2 },
+      // inward enough to show in phone portrait too
+      { x: 0.4, y: 1.02, z: 0.1, r: 0.1, h: 0.2 },
       { x: 0, y: 1.1, z: -0.05, r: 0.075, h: 0.15 }
     ],
     workBulb: { x: 0, y: 0.92, z: 0.3 }
@@ -4087,8 +4088,8 @@ three/build/three.module.js:
     { x: -0.3, y: 0.74, z: -0.3 },
     { x: 0.3, y: 0.74, z: -0.3 },
     // tops of heads
-    { x: -0.56, y: 0.97, z: 0.1 },
-    { x: 0.56, y: 0.97, z: 0.1 },
+    { x: -0.44, y: 0.94, z: 0.1 },
+    { x: 0.44, y: 0.94, z: 0.1 },
     // lantern bottoms / curtain
     { x: -0.46, y: -0.1, z: 0.55 },
     { x: 0.46, y: -0.1, z: 0.55 },
@@ -6695,14 +6696,34 @@ three/build/three.module.js:
       const divAO = (x, y, z, nx, ny, nz) => {
         if (ny > 0.5) return y < top - 0.01 ? 0.1 : 0.9;
         if (Math.abs(nz) > 0.5 && inSlot(z)) return 0.025 + 0.15 * Math.pow(smooth2(top - 0.075, top - 3e-3, y), 1.4);
-        return (0.7 + 0.2 * smooth2(bot + 0.02, -0.17, y)) * (ny < -0.5 ? 0.7 : 1);
+        return (1 + 0.2 * smooth2(bot + 0.02, -0.17, y)) * (ny < -0.5 ? 0.7 : 1);
       };
       const nB = 6, bh = (top - bot) / nB;
-      for (const [z0, z1] of [[D.z0, S2.z0], [S2.z1, D.z1]]) {
-        for (let i = 0; i < nB; i++) {
-          const y0 = bot + i * bh, cap = i === nB - 1;
-          put("fix", box(D.x0, y0, z0, D.x1, cap ? top : y0 + bh, z1, "x", { r: cap ? 65e-4 : 28e-4, k: 2, segs: 2, uS: 0.55, vS: 0.11, tint: jitterTint(T, 0.08), ao: divAO, wear: cap ? 0.6 : 0.2 }));
-        }
+      for (let i = 0; i < nB; i++) {
+        const y0 = bot + i * bh, cap = i === nB - 1;
+        put("fix", box(D.x0, y0, D.z0, D.x1, cap ? top : y0 + bh, S2.z0, "x", { r: cap ? 65e-4 : 28e-4, k: 2, segs: 2, uS: 0.55, vS: 0.11, tint: jitterTint(T, 0.08), ao: divAO, wear: cap ? 0.6 : 0.2 }));
+      }
+      {
+        const tw = 0.011, z0 = S2.z1, z1 = D.z1, o = { r: 22e-4, k: 2, segs: 2, uS: 0.55, vS: 0.11, wear: 0.5 };
+        const tt = (b) => ({ ...o, tint: jitterTint(T, 0.05), ao: (x, y, z, nx, ny) => ny > 0.5 ? 0.95 : 0.8 + 0.2 * smooth2(bot, -0.17, y), ...b });
+        put("fix", box(D.x0, top - 0.013, z0, D.x1, top, z0 + tw, "x", tt()));
+        put("fix", box(D.x0, top - 0.013, z1 - tw, D.x1, top, z1, "x", tt()));
+        put("fix", box(D.x0, top - 0.013, z0 + tw, D.x0 + tw, top, z1 - tw, "z", tt()));
+        put("fix", box(D.x1 - tw, top - 0.013, z0 + tw, D.x1, top, z1 - tw, "z", tt()));
+        for (const x of [D.x0, D.x1 - tw]) for (const z of [z0, z1 - tw]) put("fix", box(x, bot, z, x + tw, top - 0.013, z + tw, "y", tt({ r: 2e-3 })));
+        const g = new THREE.BoxGeometry(D.x1 - D.x0 - 2e-3, top - 6e-3 - bot, z1 - z0 - 2e-3);
+        g.translate((D.x0 + D.x1) / 2, (top - 6e-3 + bot) / 2, (z0 + z1) / 2);
+        const matClear = new THREE.MeshPhysicalMaterial({ color: 12114130, roughness: 0.06, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.05, transparent: true, depthWrite: false, side: THREE.DoubleSide, envMapIntensity: 1.2 });
+        matClear.onBeforeCompile = (sh) => {
+          sh.fragmentShader = sh.fragmentShader.replace("#include <opaque_fragment>", `#include <opaque_fragment>
+          float frC = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
+          float spC = max(totalSpecular.r, max(totalSpecular.g, totalSpecular.b));
+          gl_FragColor.a = clamp(0.06 + 0.55 * frC + 0.6 * spC, 0.0, 0.8);`);
+        };
+        const clear = new THREE.Mesh(g, matClear);
+        clear.name = "dividerClear";
+        clear.renderOrder = 1;
+        fixtureGroup.add(clear);
       }
       put("fix", box(D.x0 + 5e-4, bot, S2.z0 - 1e-3, D.x1 - 5e-4, SLOT_FLOOR2, S2.z1 + 1e-3, "x", { r: 2e-3, segs: 2, tint: T, ao: divAO, wear: 0 }));
       const ph = top + 0.026 - SLOT_FLOOR2, pr = (D.throat.z0 - S2.z0) / 2;
@@ -7053,7 +7074,7 @@ three/build/three.module.js:
       const items = L.map((l, i) => {
         const sc = l.h / 0.2;
         const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: texGlow, color: new THREE.Color(PALETTE.lanternAmber).multiplyScalar(i < 2 ? 0.75 : 0.6), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-        sp.scale.setScalar(i < 2 ? 0.95 : 0.68);
+        sp.scale.setScalar(i < 2 ? 0.7 : 0.68);
         sp.renderOrder = 3;
         sp.name = "lanternGlow" + i;
         group.add(sp);
@@ -7137,7 +7158,7 @@ three/build/three.module.js:
       group.add(sp);
       return { m, glass, sp };
     })();
-    const RACK_X = 0.44, POLE_R = 0.0118;
+    const RACK_X = 0.29, POLE_R = 0.0118;
     const rackPivot = new THREE.Group();
     rackPivot.name = "rack";
     rackPivot.position.set(0, 1.205, STALL.rackZ);
@@ -7149,7 +7170,7 @@ three/build/three.module.js:
     const SLOT_XS = [-0.12, 0, 0.12];
     const HOOK_DROP = 0.0625;
     {
-      const nodes = [-0.36, -0.13, 0.11, 0.33];
+      const nodes = [-0.235, -0.055, 0.175];
       const rOf = (x) => {
         let r = POLE_R * (1 - 0.04 * (x + RACK_X) / (2 * RACK_X));
         for (const nx of nodes) {
@@ -10646,7 +10667,7 @@ vec3 lanternMirror(vec3 nV, vec3 posV) {
 	float fNdv = abs(dot(normal, normalize(vViewPosition)));
 	float fFr = pow(1.0 - fNdv, 4.0);
 	float fA = clamp(uFilm.x + uFilm.y * fFr, 0.0, 0.92);
-	fA = mix(fA, uFilm.z, vFilm.x);
+	fA = mix(fA, uFilm.z, vFilm.x) * min(1.0, vFilm.w * 1.4);
 	float fF = 0.04 + 0.96 * pow(1.0 - fNdv, 5.0);
 	vec3 fMir = lanternMirror(normal, -vViewPosition) * fF * (1.0 - vFilm.x * 0.6);
 	vec3 outgoingLight = totalDiffuse * fA + (totalSpecular + fMir) * (uFilm.w * vFilm.w) + totalEmissiveRadiance;
@@ -11561,8 +11582,8 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
           dev = yy;
         } else {
           const k5 = r.v;
-          const out = [35e-4, 0.022, 0.044, 0.0495, 0.0505][k5];
-          const yo = [22e-4, 52e-4, 28e-4, -0.012, -0.034 + 4e-3 * n3][k5];
+          const out = [3e-3, 0.022, 0.0445, 0.0485, 0.0495][k5];
+          const yo = [12e-4, 19e-4, 13e-4, -0.012, -0.032 + 4e-3 * n3][k5];
           const sag = k5 >= 3 ? 2e-3 * n2 : 0;
           x = px + nx * (out + sag);
           z = pz + nz * (out + sag);
@@ -11597,8 +11618,8 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
         FA[q4] = r.seam;
         FA[q4 + 1] = r.kind === 2 ? 0.3 : 0;
         FA[q4 + 2] = r.kind === 0 ? r.v * BZ * 1e3 / 2.4 : 0;
-        FA[q4 + 3] = r.kind === 2 ? 0.22 : r.kind === 1 ? 0.7 : 1;
-        if (r.kind === 2 && r.v === 4) FA[q4] = 0.35;
+        FA[q4 + 3] = r.kind === 2 ? 0.1 : r.kind === 1 ? 0.6 : 0.9;
+        if (r.kind === 2 && r.v === 4) FA[q4] = 0.2;
       }
     }
     const FP = new Float32Array(nv * 3), FN = new Float32Array(nv * 3);
@@ -11743,7 +11764,7 @@ varying vec2 vW; varying vec2 vRS; varying vec3 vWP;` + LANT_GLSL).replace("#inc
       fNor.needsUpdate = true;
       const U = filmMat.userData.uFilm.value;
       const sp2 = smooth3(spread);
-      const pk = lerp2(0.06, 1, sp2 * sp2);
+      const pk = lerp2(0.025, 1, sp2 * sp2);
       U.x = lerp2(0.01, 0.04, lift) * pk;
       U.y = lerp2(0.2, 0.48, lift) * pk;
       U.z = lerp2(0.3, 0.5, lift) * pk;
@@ -15275,7 +15296,7 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
       if (H.stage === "raise" || H.stage === "hang") {
         const p = homeActive.group.position;
         pose.L.inner = { pos: p.clone().add(V(0, 0.09, 0)), mode: "hold", grip: 0.6 };
-        pose.R.inner = { pos: p.clone().add(V(0.02, -0.06, 0.02)), mode: "carry", grip: 0.3 };
+        if (H.stage === "hang" || H.st > 0.45) pose.R.inner = { pos: p.clone().add(V(0.02, -0.06, 0.02)), mode: "carry", grip: 0.3 };
         pose.L.look = pose.R.look = H.stage === "raise" ? "camera" : "rack";
         pose.L.lean = pose.R.lean = 0.2;
       }
@@ -15347,8 +15368,8 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
       tmp.addScaledVector(tmp2.copy(camera.position).sub(tmp).normalize(), -0.03);
       halo.position.copy(tmp);
       const k = 0.5 + 0.5 * Math.sin(t * 4.2);
-      halo.material.opacity += (0.35 + 0.4 * k - halo.material.opacity) * Math.min(1, dt * 8);
-      halo.scale.setScalar(0.17 + 0.04 * k);
+      halo.material.opacity += (0.06 + 0.08 * k - halo.material.opacity) * Math.min(1, dt * 8);
+      halo.scale.setScalar(0.24 + 0.04 * k);
     } else halo.material.opacity = Math.max(0, halo.material.opacity - dt * 3);
     for (const s of ["L", "R"]) {
       const isHint = hint.side === s;
@@ -15375,6 +15396,7 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
       roles.held = roles.cur;
       roles.cur = roles.nxt;
       roles.nxt = null;
+      if (S.big) vis.bigWaterVis = S.big.water;
     }
     if (!S.big && roles.held && S.phase !== "lift") {
       roles.nxt = roles.held;
@@ -15552,7 +15574,7 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
       }
       const to = V(st.to.x, st.to.y, st.to.z);
       const vel = st.kind === "spout" ? V((st.side === "L" ? -1 : 1) * -0.05, 0.35, 0.05) : st.kind === "dish" ? V(0, -0.1, 0.5) : st.kind === "overflow" ? V(0, 0, 0.12) : V(0, -0.2, 0);
-      const width = { spout: 6e-3, drop: 0.035, pour: 0.03, bigdrop: 0.12, dish: 0.06, overflow: 0.012, drain: 0.016 }[st.kind] || 0.02;
+      const width = { spout: 0.014, drop: 0.042, pour: 0.04, bigdrop: 0.13, dish: 0.07, overflow: 0.016, drain: 0.02 }[st.kind] || 0.02;
       const opts = { from, to, vel, rate: st.rate, kind: st.kind === "bigdrop" ? "sheet" : st.kind === "dish" ? "sheet" : st.kind === "drop" ? "drop" : st.kind === "spout" ? "spout" : "pour", width };
       if (!activeStreams.has(id)) {
         water.stream.start(id, opts);
@@ -15586,7 +15608,7 @@ roughnessFactor = mix(roughnessFactor, 0.6, wFoam);
     last = now;
     if (!(dt > 0)) dt = 1 / 60;
     dt = Math.min(dt, TEST ? 0.25 : 0.05);
-    const ts = TEST ? window.__timeScale || 1 : 1;
+    const ts = TEST ? window.__timeScale ?? 1 : 1;
     vis.t += dt;
     vis.idle += dt;
     sim.step(dt * ts);
