@@ -978,6 +978,7 @@ function computePieces(){
   for(const pc of PIECES){if(pc.list.length<3){for(const i of pc.list){if(P.area[i]<1e-6){killP(i);}}}}
   PIECES=PIECES.filter(pc=>pc.list.some(i=>P.alive[i]));
   PIECES.forEach((pc,k)=>{pc.id=k;pc.list=pc.list.filter(i=>P.alive[i]);for(const i of pc.list)lab[i]=k;});
+  for(const pc of PIECES)pieceStats(pc);
   topoDirty=false;ADJ=null;
 }
 let ADJ=null;
@@ -1077,7 +1078,7 @@ function ovenBegin(gx,gz,tolW){
       if(!anchorEar&&isHardEar(j)&&Math.hypot(P.x[j]-ax,P.z[j]-az)>0.035)continue;
       if(Math.hypot(P.x[j]-ax,P.z[j]-az)<rb)q.push(j);}}
   P.w[a]=1;
-  DRAG.ringAtStart=RING.has;DRAG.slide0=CH.slide;
+  DRAG.ringAtStart=RING.has;DRAG.slide0=CH.slide;DRAG.loop=false;
   if(RING.has&&RING.cells&&RING.cells.length){
     const C=RING.cells;let dA=1e9;for(let k=0;k<C.length;k+=2)dA=Math.min(dA,Math.hypot(C[k]-ax,C[k+1]-az));
     if(dA<0.25){ // anchor belongs to the loop: the whole loop follows elastically
@@ -1558,7 +1559,7 @@ function sampleGrid(arr,x,z){
   return (arr[k]*(1-u)+arr[k+1]*u)*(1-v)+(arr[k+GF.nx]*(1-u)+arr[k+GF.nx+1]*u)*v;
 }
 function detectHoles(){
-  const r=GF.rect;if(!r)return null;const nx=GF.nx;
+  const r=GF.idxRect||GF.rect;if(!r)return null;const nx=GF.nx;
   const i0=Math.max(0,r.i0-1),i1=Math.min(GF.nx-1,r.i1+1),j0=Math.max(0,r.j0-1),j1=Math.min(GF.nz-1,r.j1+1);
   const W2=i1-i0+1,H2=j1-j0+1;const seen=new Uint8Array(W2*H2);const q=[];
   const empty=(i,j)=>GF.vis[j*nx+i]<0.5;
@@ -1789,7 +1790,7 @@ function plateBegin(gx,gz,tolW){
   if(a<0)return false;
   DRAG.anchor=a;DRAG.mode='plate';DRAG.G0=[gx,gz];DRAG.G=[gx,gz];DRAG.Gp=[gx,gz];DRAG.D=[0,0];DRAG.maxD=0;DRAG.snapped=false;DRAG.rigid=null;DRAG.cut=null;
   DRAG.press=0.6;DRAG.pressX=P.x[a];DRAG.pressZ=P.z[a];
-  for(let i=0;i<P.n;i++){P.ex[i]=P.x[i];P.ez[i]=P.z[i];}
+  for(let i=0;i<P.n;i++){if(P.eat[i])continue;P.ex[i]=P.x[i];P.ez[i]=P.z[i];}
   removeCrumbs();if(!P.alive[a])return false;
   const plan=planCut(a);
   if(!plan)return false;
@@ -1872,7 +1873,7 @@ function releasePlate(){
     if(pc){pieceStats(pc);
       const m=LAY.dogZone;const dd=Math.hypot(pc.cx-m.x,pc.cz-m.z);
       const onPlate=Math.hypot(pc.cx-LAY.plate.x,pc.cz-LAY.plate.z)<LAY.plate.r;
-      if(dd<m.r+0.08||!onPlate){dogEat(pc,true);}
+      if(dd<m.r+0.08||!onPlate){if(!dogEat(pc,true))DOGQ.push({t:TIME.t+0.3,pid:pc.list[0],force:true});}
       else if(pc.area<0.07||(PIECES.length===1&&pc.area<0.12)){emit('smallDrop',{x:pc.cx,z:pc.cz});DOGQ.push({t:TIME.t+0.55,pid:pc.list[0]});}
       else emit('pieceDrop',{x:pc.cx,z:pc.cz});
     }
@@ -1881,7 +1882,7 @@ function releasePlate(){
 function setTimeout0(f){try{f();}catch(e){}}
 function removeCrumbs(){
   let any=false;
-  for(const pc of PIECES){if(pc.list.length>=8&&pc.area>=0.0025)continue;if(DRAG.active&&pc.list.indexOf(DRAG.anchor)>=0&&pc.list.length>=4)continue;
+  for(const pc of PIECES){if(pc.area===undefined)pieceStats(pc);if(pc.list.length>=8&&pc.area>=0.0025)continue;if(DRAG.active&&pc.list.indexOf(DRAG.anchor)>=0&&pc.list.length>=4)continue;
     const set=new Uint8Array(P.n);for(const p of pc.list)set[p]=1;
     for(let t=0;t<TR.n;t++){if(TR.alive[t]&&(set[TR.a[t]]||set[TR.b[t]]||set[TR.c[t]]))killTri(t);}
     for(let e=0;e<ED.n;e++){if(ED.alive[e]&&(set[ED.a[e]]||set[ED.b[e]]))killEdge(e);}
@@ -2532,7 +2533,7 @@ function update(dt){
     SND.sizzle(0);LIGHT.glow=lerp(LIGHT.glow,0,0.05);
     if(DRAG.active&&DRAG.mode==='plate')plateDragUpdate(dt);
     dogEatUpdate(dt);
-    for(let k=DOGQ.length-1;k>=0;k--){const q=DOGQ[k];if(TIME.t>=q.t&&!DOG.eating){DOGQ.splice(k,1);if(P.alive[q.pid]&&!(DRAG.active&&DRAG.rigid&&P.piece[DRAG.rigid.a]===P.piece[q.pid])){const pc=PIECES[P.piece[q.pid]];if(pc){pieceStats(pc);if(pc.area<0.07||(PIECES.length===1&&pc.area<0.12))dogEat(pc,false);}}}}
+    for(let k=DOGQ.length-1;k>=0;k--){const q=DOGQ[k];if(TIME.t>=q.t&&!DOG.eating){DOGQ.splice(k,1);if(P.alive[q.pid]&&!(DRAG.active&&DRAG.rigid&&P.piece[DRAG.rigid.a]===P.piece[q.pid])){const pc=PIECES[P.piece[q.pid]];if(pc){pieceStats(pc);if(q.force||pc.area<0.07||(PIECES.length===1&&pc.area<0.12))dogEat(pc,!!q.force);}}}}
     computeDerived();
     cheeseUpdate(dt,true);
     G.leftT=(G.leftT||0)+dt;
@@ -2770,12 +2771,12 @@ function initGLResources(){
   gl.disable(gl.CULL_FACE);gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
 }
 canvas.addEventListener('webglcontextlost',(e)=>{e.preventDefault();},false);
-canvas.addEventListener('webglcontextrestored',()=>{try{initGLResources();bgDirty=true;}catch(e){}},false);
+canvas.addEventListener('webglcontextrestored',()=>{try{initGLResources();bgDirty=true;GF.uploadAll=true;GF.partial=false;GF.forceFrames=Math.max(GF.forceFrames||0,3);if(!rafId&&running)rafId=requestAnimationFrame(frame);}catch(e){}},false);
 
 function boot(){
   initLSH();initFieldArrays();
   resize();
-  if(gl){initGLResources();}
+  if(gl&&!gl.isContextLost()){try{initGLResources();}catch(e){W.__errs.push('init:'+e);}}
   const m=loadOutline();G.outline=m;
   setupDough(m,true);
   G.phase='oven';G.lastInput=0;
